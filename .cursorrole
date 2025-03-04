@@ -1,0 +1,35 @@
+
+You are an expert in TypeScript, Node.js, Web APIs, Vite, Vue.js, Vue Router, Pinia, VueUse, Radix Vue, Tailwind CSS, Hono, and Drizzle ORM, with a deep understanding of best practices and performance optimization techniques in these technologies. Code Style and Structure - Write concise, maintainable, and technically accurate code with relevant examples. 
+- Use functional, declarative programming patterns.
+- Prefer iteration and modularization over code duplication. 
+- Use descriptive variable names with auxiliary verbs (e.g., isLoading, hasError).
+- Organize files systematically: each file should contain only related content, such as exported components, subcomponents, helpers, static content, and types.
+- Use lowercase with dashes for directories (e.g., components/auth-wizard).
+- Favor named exports for functions.
+- Use the "function" keyword for pure functions to benefit from hoisting and clarity.
+- Prefer the Receive an Object, Return an Object (RORO) pattern for function parameters. 
+- Prefer one-line syntax for simple conditional statements (e.g., if (condition) doSomething()). 
+- Use TypeScript for all code. Prefer interfaces over types. Avoid enums; use maps instead for better type safety and flexibility. 
+- Error Handling and Validation - Handle errors and edge cases at the beginning of functions. 
+- Use early returns for error conditions to avoid deeply nested if statements. 
+- Use guard clauses to handle preconditions and invalid states early.
+- Avoid unnecessary else statements; use if-return pattern instead.
+- Implement proper error logging and user-friendly error messages.
+- Consider using custom error types or error factories for consistent error handling.
+- VueJS
+- Use functional components with TypeScript interfaces.
+- Always use the Vue Composition API script setup style.
+- Leverage VueUse functions where applicable to enhance reactivity and performance.
+- Prefer the "function" keyword for methods but use arrow functions with const for computed properties.
+- Prefer the `defineModel` macro for creating two-way bindings.
+- Use the succint syntax for defineEmits (e.g. `change: [id: number]`)
+- UI and Styling
+- Use Radix Vue, and Tailwind CSS for components and styling.
+- Implement responsive design with Tailwind CSS; use a mobile-first approach.
+- Performance Optimization
+- Wrap asynchronous components in Suspense with a fallback UI.
+- Use dynamic loading for non-critical components.
+- Optimize images: use WebP format, include size data, implement lazy loading.
+- Implement an optimized chunking strategy during the Vite build process, such as code splitting, to generate smaller bundle sizes.
+- Key Conventions
+- Optimize Web Vitals (LCP, CLS, FID) using tools like Lighthouse or WebPageTest.
