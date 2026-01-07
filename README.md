@@ -33,43 +33,36 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
    cd extractify
    ```
 
-2. 安装后端依赖
+2. （推荐）直接运行 `bash start_all.sh`，脚本会自动检测/安装缺失的前后端依赖，并创建所需目录后启动服务。  
+   如需手动安装，可参考下方命令：
    ```bash
-   cd backend
-   npm install
-   ```
-
-3. 安装前端依赖
-   ```bash
-   cd ../frontend
-   npm install
-   ```
-
-4. 创建必要的目录
-   ```bash
-   mkdir -p backend/uploads/images
-   mkdir -p backend/uploads/output
-   mkdir -p backend/uploads/preview
-   mkdir -p backend/temp
+   # 后端依赖
+   cd backend && npm install
+   # 前端依赖
+   cd ../frontend && npm install
+   # 必要目录
+   cd .. && mkdir -p backend/uploads/images backend/uploads/output backend/uploads/preview backend/temp
    ```
 
 ## 使用说明
 
 ### 开发环境
 
-1. 启动后端服务器
+1. 启动后端服务器（默认端口 13434）
    ```bash
    cd backend
    npm run dev
    ```
 
-2. 在另一个终端窗口启动前端开发服务器
+2. 在另一个终端窗口启动前端开发服务器（默认端口 18982），已在配置中静默处理 Sass 旧版 API 的警告
    ```bash
    cd frontend
    npm run dev
    ```
 
 3. 打开浏览器访问 `http://localhost:5173`
+
+> 一键启动：在项目根目录执行 `bash start_all.sh` 可同时启动后端（13434）与前端（默认 18982），并尝试自动打开前端页面。
 
 ### 生产环境
 
