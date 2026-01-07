@@ -5,9 +5,27 @@ const path = require('path');
 const fs = require('fs');
 const documentController = require('../controllers/documentController');
 
+// 清空旧的上传/解析数据，防止积压
+const clearOldUploads = () => {
+  const uploadsRoot = path.join(__dirname, '../uploads');
+  const targets = [
+    path.join(uploadsRoot, 'documents'),
+    path.join(uploadsRoot, 'images')
+  ];
+
+  targets.forEach(dir => {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+};
+
 // 配置 multer 存储
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
+    // 每次新上传前清空旧的文档与图片
+    clearOldUploads();
+
     const uploadDir = path.join(__dirname, '../uploads/documents');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });

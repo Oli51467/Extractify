@@ -7,7 +7,7 @@ const apiRoutes = require('./routes/api');
 
 // 创建 Express 应用
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 13434;
 
 // 确保上传和输出目录存在
 const uploadsDir = path.join(__dirname, 'uploads');

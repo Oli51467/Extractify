@@ -27,20 +27,22 @@
 
     <div v-if="filteredImages.length > 0" class="gallery-grid">
       <div v-for="image in filteredImages" :key="image.id" class="image-card">
-        <div class="image-container">
+        <div class="image-container" @click="openPreview(image)" title="点击查看大图">
           <img :src="image.path" :alt="image.name" />
         </div>
         <div class="image-info">
-          <span class="image-name">{{ image.name }}</span>
-          <span class="image-size">{{ formatSize(image.size) }}</span>
-          <span class="image-source" v-if="image.source">{{ image.source }}</span>
-        </div>
-        <div class="image-actions">
-          <el-button type="primary" size="small" @click="downloadImage(image)">
-            <el-icon>
-              <download />
-            </el-icon>
-          </el-button>
+          <div class="info-top">
+            <span class="image-name">{{ image.name }}</span>
+            <el-button type="primary" text size="small" @click.stop="downloadImage(image)" title="下载">
+              <el-icon>
+                <download />
+              </el-icon>
+            </el-button>
+          </div>
+          <div class="info-meta">
+            <span class="image-size">{{ formatSize(image.size) }}</span>
+            <span class="image-source" v-if="image.source">{{ image.source }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -48,6 +50,18 @@
     <div v-else class="no-images">
       <el-empty description="暂无图片" />
     </div>
+
+    <el-dialog v-model="previewVisible" width="80%" :close-on-click-modal="true" :destroy-on-close="true" center>
+      <template #title>
+        <div class="preview-title">
+          <span>{{ selectedImage?.name || '图片预览' }}</span>
+          <span v-if="selectedImage" class="preview-meta">{{ formatSize(selectedImage.size) }}</span>
+        </div>
+      </template>
+      <div class="preview-body" v-if="selectedImage">
+        <img :src="selectedImage.path" :alt="selectedImage.name" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -69,6 +83,8 @@ const props = defineProps({
 
 // 搜索功能
 const searchQuery = ref('')
+const previewVisible = ref(false)
+const selectedImage = ref(null)
 
 // 过滤图片
 const filteredImages = computed(() => {
@@ -100,7 +116,6 @@ const downloadImage = (image) => {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
-  ElMessage.success(`正在下载 ${image.name}`)
 }
 
 // 下载指定压缩包
@@ -136,12 +151,17 @@ const downloadZip = (url) => {
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-      ElMessage.success('正在下载图片压缩包')
     })
     .catch(error => {
       console.error('下载失败:', error)
       ElMessage.error('下载失败: ' + error.message)
     })
+}
+
+// 打开图片预览
+const openPreview = (image) => {
+  selectedImage.value = image
+  previewVisible.value = true
 }
 </script>
 
@@ -187,6 +207,7 @@ const downloadZip = (url) => {
   align-items: center;
   overflow: hidden;
   background-color: #f5f7fa;
+  cursor: zoom-in;
 
   img {
     max-width: 100%;
@@ -199,38 +220,73 @@ const downloadZip = (url) => {
   padding: 0.5rem;
   display: flex;
   flex-direction: column;
+  gap: 0.25rem;
 
-  .image-name {
-    font-size: 0.875rem;
-    color: #303133;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .info-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+
+    .image-name {
+      font-size: 0.875rem;
+      color: #303133;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
   }
 
-  .image-size {
-    font-size: 0.75rem;
-    color: #909399;
-    margin-top: 0.25rem;
-  }
+  .info-meta {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
 
-  .image-source {
-    font-size: 0.75rem;
-    color: #409EFF;
-    margin-top: 0.25rem;
-  }
-}
+    .image-size {
+      font-size: 0.75rem;
+      color: #909399;
+    }
 
-.image-actions {
-  padding: 0.5rem;
-  display: flex;
-  justify-content: flex-end;
-  border-top: 1px solid #ebeef5;
+    .image-source {
+      font-size: 0.75rem;
+      color: #409EFF;
+    }
+  }
 }
 
 .no-images {
   padding: 2rem;
   display: flex;
   justify-content: center;
+}
+
+.preview-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.preview-meta {
+  color: #909399;
+  font-size: 0.875rem;
+}
+
+.preview-body {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1rem 0;
+
+  img {
+    max-width: 100%;
+    max-height: 80vh;
+    object-fit: contain;
+    border-radius: 4px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+  }
 }
 </style>

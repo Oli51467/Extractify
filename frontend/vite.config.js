@@ -1,3 +1,5 @@
+process.env.SASS_SILENCE_DEPRECATIONS = 'legacy-js-api'
+
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
@@ -13,11 +15,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:13434',
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:13434',
         changeOrigin: true,
       }
     }

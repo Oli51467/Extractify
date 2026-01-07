@@ -85,7 +85,7 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
    npm start
    ```
 
-3. 访问 `http://localhost:3000`
+3. 访问 `http://localhost:13434`
 
 ## 使用方法
 
@@ -95,6 +95,218 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
 4. 使用搜索框筛选图片
 5. 点击单个图片下方的下载按钮下载图片，或使用顶部的"下载"按钮下载所有图片的压缩包
 6. 如需清空当前图片，点击右上角的清空按钮
+
+## 部署到Ubuntu服务器
+
+### 1. 准备服务器环境
+
+1. 更新系统包
+   ```bash
+   sudo apt update
+   sudo apt upgrade -y
+   ```
+
+2. 安装Node.js和npm
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+   sudo apt install -y nodejs
+   
+   # 验证安装
+   node -v
+   npm -v
+   ```
+
+3. 安装Git
+   ```bash
+   sudo apt install -y git
+   ```
+
+4. 安装构建工具和依赖
+   ```bash
+   sudo apt install -y build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
+   ```
+
+### 2. 部署应用
+
+1. 克隆代码仓库
+   ```bash
+   git clone https://github.com/yourusername/extractify.git
+   cd extractify
+   ```
+
+2. 安装PM2进程管理器
+   ```bash
+   sudo npm install -g pm2
+   ```
+
+3. 构建前端
+   ```bash
+   cd frontend
+   npm install
+   npm run build
+   
+   # 将构建后的文件复制到后端的public目录
+   mkdir -p ../backend/public
+   cp -r dist/* ../backend/public/
+   ```
+
+4. 配置后端
+   ```bash
+   cd ../backend
+   npm install
+   
+   # 创建必要的目录
+   mkdir -p uploads/images
+   mkdir -p uploads/output
+   mkdir -p uploads/preview
+   mkdir -p temp
+   
+   # 设置目录权限
+   chmod -R 755 uploads
+   chmod -R 755 temp
+   ```
+
+5. 创建环境变量文件
+   ```bash
+   cat > .env << EOL
+   PORT=13434
+   NODE_ENV=production
+   UPLOAD_DIR=uploads
+   TEMP_DIR=temp
+   MAX_FILE_SIZE=50
+   EOL
+   ```
+
+### 3. 使用PM2启动应用
+
+1. 创建PM2配置文件
+   ```bash
+   cat > ecosystem.config.js << EOL
+   module.exports = {
+     apps: [{
+       name: "extractify",
+       script: "server.js",
+       env: {
+         NODE_ENV: "production",
+         PORT: 13434
+       },
+       instances: "max",
+       exec_mode: "cluster",
+       watch: false,
+       max_memory_restart: "500M"
+     }]
+   }
+   EOL
+   ```
+
+2. 启动应用
+   ```bash
+   pm2 start ecosystem.config.js
+   
+   # 设置PM2开机自启
+   pm2 startup
+   pm2 save
+   ```
+
+### 4. 配置Nginx反向代理
+
+1. 安装Nginx
+   ```bash
+   sudo apt install -y nginx
+   ```
+
+2. 创建Nginx配置文件
+   ```bash
+   sudo nano /etc/nginx/sites-available/extractify
+   ```
+
+3. 添加以下配置
+   ```nginx
+   server {
+       listen 80;
+       server_name your-domain.com www.your-domain.com;
+   
+       location / {
+           proxy_pass http://localhost:13434;
+           proxy_http_version 1.1;
+           proxy_set_header Upgrade $http_upgrade;
+           proxy_set_header Connection 'upgrade';
+           proxy_set_header Host $host;
+           proxy_cache_bypass $http_upgrade;
+           proxy_set_header X-Real-IP $remote_addr;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+   
+       # 增加上传文件大小限制
+       client_max_body_size 50M;
+   }
+   ```
+
+4. 启用站点并重启Nginx
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/extractify /etc/nginx/sites-enabled/
+   sudo nginx -t
+   sudo systemctl restart nginx
+   ```
+
+### 5. 配置SSL证书（可选）
+
+1. 安装Certbot
+   ```bash
+   sudo apt install -y certbot python3-certbot-nginx
+   ```
+
+2. 获取SSL证书
+   ```bash
+   sudo certbot --nginx -d your-domain.com -d www.your-domain.com
+   ```
+
+3. 设置自动续期
+   ```bash
+   sudo systemctl status certbot.timer
+   ```
+
+### 6. 维护和更新
+
+1. 拉取最新代码
+   ```bash
+   cd /path/to/extractify
+   git pull
+   ```
+
+2. 更新依赖并重新构建
+   ```bash
+   # 更新前端
+   cd frontend
+   npm install
+   npm run build
+   cp -r dist/* ../backend/public/
+   
+   # 更新后端
+   cd ../backend
+   npm install
+   
+   # 重启应用
+   pm2 restart extractify
+   ```
+
+### 7. 日志和监控
+
+1. 查看应用日志
+   ```bash
+   pm2 logs extractify
+   ```
+
+2. 监控应用状态
+   ```bash
+   pm2 monit
+   ```
+
+3. 查看Nginx日志
+   ```bash
+   sudo tail -f /var/log/nginx/access.log
+   sudo tail -f /var/log/nginx/error.log
+   ```
 
 ## 注意事项
 

@@ -227,8 +227,13 @@ async function extractImagesFromPdf(pdfPath, outputDir, tempDir) {
         // 处理每个图像引用
         for (const imageRef of imageRefs) {
           try {
-            // 获取图像对象
-            const imgObj = await page.objs.get(imageRef);
+            // 获取图像对象（如果尚未解析则等待解析完成）
+            const imgObj = await getImageObject(page, imageRef);
+
+            if (!imgObj) {
+              console.warn(`图像 ${imageRef} 未解析，已跳过`);
+              continue;
+            }
 
             if (imgObj && imgObj.data && imgObj.width && imgObj.height) {
               const imageIndex = images.length + 1;
@@ -260,8 +265,6 @@ async function extractImagesFromPdf(pdfPath, outputDir, tempDir) {
               } catch (saveError) {
                 console.error(`保存图像失败:`, saveError);
               }
-            } else {
-              console.log(`图像 ${imageRef} 对象无效或不完整`);
             }
           } catch (imgError) {
             console.error(`处理图像 ${imageRef} 时出错:`, imgError);
@@ -351,6 +354,33 @@ function processImageData(imgObj) {
     console.error('处理图像数据失败:', error);
     throw error;
   }
+}
+
+// 等待 pdf.js 页面对象解析出图像数据
+function getImageObject(page, imageRef) {
+  // 优先直接获取；若未解析则挂载回调等待
+  if (page.objs.has(imageRef)) {
+    return Promise.resolve(page.objs.get(imageRef));
+  }
+
+  return new Promise((resolve, reject) => {
+    let timeoutId;
+    try {
+      timeoutId = setTimeout(() => {
+        // 超时则放弃该图像，返回 null 而非抛错，避免中断整个提取流程
+        console.warn(`等待图像对象解析超时: ${imageRef}`);
+        resolve(null);
+      }, 5000);
+
+      page.objs.get(imageRef, data => {
+        clearTimeout(timeoutId);
+        resolve(data);
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      reject(err);
+    }
+  });
 }
 
 // 渲染PDF页面为图像
