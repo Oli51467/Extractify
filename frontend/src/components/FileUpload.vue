@@ -1,16 +1,24 @@
 <template>
   <div class="file-upload">
-    <el-upload class="upload-area" drag action="/api/documents/extract-images" :headers="headers"
-      :on-success="handleSuccess" :on-error="handleError" :on-progress="handleProgress" :before-upload="beforeUpload"
-      :show-file-list="true" :limit="1" accept=".docx,.doc,.pdf" :auto-upload="true" ref="uploadRef">
+    <el-upload
+      ref="uploadRef"
+      class="upload-area"
+      drag
+      action="/api/documents/extract-images"
+      :headers="uploadHeaders"
+      :on-success="handleSuccess"
+      :on-error="handleError"
+      :on-progress="handleProgress"
+      :before-upload="beforeUpload"
+      :show-file-list="true"
+      :limit="1"
+      accept=".docx,.doc,.pdf"
+      :auto-upload="true"
+    >
       <el-icon class="el-icon--upload"><upload-filled /></el-icon>
-      <div class="el-upload__text">
-        拖拽文档到此处或 <em>点击上传</em>
-      </div>
+      <div class="el-upload__text">拖拽文档到此处或 <em>点击上传</em></div>
       <template #tip>
-        <div class="el-upload__tip">
-          支持 .docx、.doc 格式的 Word 文档和 .pdf 格式的 PDF 文件
-        </div>
+        <div class="el-upload__tip">支持 .docx、.doc 格式的 Word 文档和 .pdf 格式的 PDF 文件</div>
       </template>
     </el-upload>
 
@@ -22,7 +30,7 @@
 </template>
 
 <script setup>
-import { ref, onUnmounted, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
@@ -30,164 +38,191 @@ const emit = defineEmits(['images-extracted'])
 
 const isUploading = ref(false)
 const uploadProgress = ref(0)
-let progressTimer = null
+const uploadTransportProgress = ref(0)
+const backendProgress = ref(0)
+const backendMessage = ref('')
 const uploadRef = ref(null)
 const currentFileName = ref('')
 const fileType = ref('')
+const currentJobId = ref('')
+let progressPollTimer = null
+const sessionReady = ref(false)
 
-// 获取进度文本
-const getProgressText = () => {
-  if (uploadProgress.value < 60) {
-    return '正在上传文件...';
-  } else if (uploadProgress.value < 85) {
-    return fileType.value === 'pdf' ? '正在分析PDF...' : '正在解压文件...';
-  } else if (uploadProgress.value < 95) {
-    return '正在提取图片...';
-  } else {
-    return '正在处理图片...';
+const generateJobId = () => `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+
+const stopProgressPolling = () => {
+  if (progressPollTimer) {
+    clearInterval(progressPollTimer)
+    progressPollTimer = null
   }
 }
 
-// 上传请求头
-const headers = {
-  'X-Requested-With': 'XMLHttpRequest'
+const updateDisplayProgress = () => {
+  if (!isUploading.value) return
+
+  const transportWeight = Math.min(uploadTransportProgress.value, 100) * 0.45
+  const backendWeight = backendProgress.value > 0
+    ? 45 + Math.min(backendProgress.value, 100) * 0.5
+    : 0
+
+  const nextProgress = Math.min(99, Math.max(5, transportWeight, backendWeight))
+  if (nextProgress > uploadProgress.value) {
+    uploadProgress.value = nextProgress
+  }
 }
 
-// 上传前的处理
-const beforeUpload = (file) => {
-  // 检查文件类型
+const fetchJobProgress = async () => {
+  if (!currentJobId.value) return
+
+  try {
+    const response = await fetch(`/api/documents/jobs/${encodeURIComponent(currentJobId.value)}`)
+    if (!response.ok) return
+
+    const data = await response.json()
+    if (!data.success || !data.job) return
+
+    backendProgress.value = Number(data.job.progress || 0)
+    backendMessage.value = data.job.message || backendMessage.value
+
+    if (data.job.status === 'failed' && data.job.message) {
+      ElMessage.error(data.job.message)
+      stopProgressPolling()
+    }
+
+    updateDisplayProgress()
+  } catch (error) {
+    // 进度接口短暂失败不影响主流程
+  }
+}
+
+const startProgressPolling = () => {
+  stopProgressPolling()
+  fetchJobProgress()
+  progressPollTimer = setInterval(fetchJobProgress, 800)
+}
+
+const getProgressText = () => {
+  if (backendMessage.value) return backendMessage.value
+  if (uploadTransportProgress.value < 100) return '正在上传文件...'
+  return fileType.value === 'pdf' ? '正在处理 PDF...' : '正在处理 Word 文档...'
+}
+
+const uploadHeaders = computed(() => ({
+  'X-Requested-With': 'XMLHttpRequest',
+  'X-Job-Id': currentJobId.value || ''
+}))
+
+const ensureSessionReady = async () => {
+  if (sessionReady.value) return true
+
+  const response = await fetch('/api/session')
+  if (!response.ok) {
+    throw new Error('初始化会话失败')
+  }
+
+  sessionReady.value = true
+  return true
+}
+
+const beforeUpload = async (file) => {
+  const dotIndex = file.name.lastIndexOf('.')
+  const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : ''
+
   const isWordDoc = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-    file.type === 'application/msword';
-  const isPdfDoc = file.type === 'application/pdf';
+    file.type === 'application/msword' ||
+    ext === '.docx' ||
+    ext === '.doc'
+  const isPdfDoc = file.type === 'application/pdf' || ext === '.pdf'
 
   if (!isWordDoc && !isPdfDoc) {
-    ElMessage.error('只能上传Word文档或PDF文件!');
-    return false;
+    ElMessage.error('只能上传 Word 文档或 PDF 文件!')
+    return false
   }
 
-  // 设置文件类型
-  fileType.value = isPdfDoc ? 'pdf' : 'word';
+  fileType.value = isPdfDoc ? 'pdf' : 'word'
 
-  // 检查文件大小
-  const isLt50M = file.size / 1024 / 1024 < 50;
-
+  const isLt50M = file.size / 1024 / 1024 < 50
   if (!isLt50M) {
-    ElMessage.error('文件大小不能超过50MB!');
-    return false;
+    ElMessage.error('文件大小不能超过50MB!')
+    return false
   }
 
-  // 保存当前文件名
-  currentFileName.value = file.name.replace(/\.[^/.]+$/, ""); // 移除扩展名
+  currentFileName.value = file.name.replace(/\.[^/.]+$/, '')
 
-  isUploading.value = true;
-  uploadProgress.value = 0;
-
-  // 设置初始进度
-  uploadProgress.value = 5;
-
-  // 启动模拟进度
-  startProgressSimulation(file.size);
-
-  return true;
-}
-
-// 模拟进度增长
-const startProgressSimulation = (fileSize) => {
-  // 清除可能存在的旧定时器
-  if (progressTimer) {
-    clearInterval(progressTimer);
+  try {
+    await ensureSessionReady()
+  } catch (error) {
+    ElMessage.error(error.message || '会话初始化失败，请重试')
+    return false
   }
 
-  // 根据文件大小调整进度增长速度
-  const sizeInMB = fileSize / (1024 * 1024);
-  const baseInterval = sizeInMB < 5 ? 200 :
-    sizeInMB < 20 ? 500 : 1000;
+  currentJobId.value = generateJobId()
+  isUploading.value = true
+  uploadProgress.value = 5
+  uploadTransportProgress.value = 0
+  backendProgress.value = 0
+  backendMessage.value = '正在上传文件...'
 
-  progressTimer = setInterval(() => {
-    if (uploadProgress.value < 60) {
-      // 上传阶段 - 快速增长
-      uploadProgress.value += 2;
-    } else if (uploadProgress.value < 85) {
-      // 解压和处理阶段 - 缓慢增长
-      uploadProgress.value += 1;
-    } else if (uploadProgress.value < 95) {
-      // 最终处理阶段 - 非常缓慢
-      uploadProgress.value += 0.5;
-    } else {
-      // 停止在95%，等待实际完成
-      clearInterval(progressTimer);
-    }
-  }, baseInterval);
+  startProgressPolling()
+  return true
 }
 
-// 上传进度的处理
 const handleProgress = (event) => {
-  if (event.percent) {
-    // 将上传进度映射到0-60%范围
-    const calculatedProgress = Math.min(60, Math.floor(event.percent * 0.6));
-    // 只有当计算的进度大于当前进度时才更新
-    if (calculatedProgress > uploadProgress.value) {
-      uploadProgress.value = calculatedProgress;
-    }
-  }
+  if (!event.percent) return
+
+  uploadTransportProgress.value = Math.max(uploadTransportProgress.value, Math.floor(event.percent))
+  backendMessage.value = uploadTransportProgress.value >= 100
+    ? '上传完成，等待后端处理...'
+    : '正在上传文件...'
+  updateDisplayProgress()
 }
 
-// 上传成功的处理
 const handleSuccess = (response) => {
-  // 清除进度模拟
-  if (progressTimer) {
-    clearInterval(progressTimer);
-    progressTimer = null;
-  }
+  stopProgressPolling()
 
-  isUploading.value = false;
-  uploadProgress.value = 100;
+  isUploading.value = false
+  uploadProgress.value = 100
+  backendProgress.value = 100
+  backendMessage.value = response.message || '处理完成'
 
   if (response.success) {
-    ElMessage.success(`成功提取 ${response.images.length} 张图片`);
+    ElMessage.success(`成功提取 ${response.images.length} 张图片`)
 
-    // 添加文件名信息
     emit('images-extracted', {
       images: response.images,
       zipUrl: response.zipUrl,
-      source: currentFileName.value
-    });
+      source: currentFileName.value,
+      jobId: response.jobId || currentJobId.value
+    })
 
-    // 重置上传组件，准备下一次上传
     if (uploadRef.value) {
-      uploadRef.value.clearFiles();
+      uploadRef.value.clearFiles()
     }
   } else {
-    ElMessage.error(response.message || '图片提取失败');
+    ElMessage.error(response.message || '图片提取失败')
   }
+
+  currentJobId.value = ''
 }
 
-// 上传失败的处理
 const handleError = (error) => {
-  // 清除进度模拟
-  if (progressTimer) {
-    clearInterval(progressTimer);
-    progressTimer = null;
-  }
+  stopProgressPolling()
 
-  isUploading.value = false;
-  uploadProgress.value = 0;
+  isUploading.value = false
+  uploadProgress.value = 0
+  backendProgress.value = 0
+  backendMessage.value = ''
+  currentJobId.value = ''
 
-  console.error('上传错误:', error);
-  ElMessage.error('上传失败，请重试');
+  console.error('上传错误:', error)
+  ElMessage.error('上传失败，请重试')
 }
 
-// 组件卸载时清理定时器
 onUnmounted(() => {
-  if (progressTimer) {
-    clearInterval(progressTimer);
-  }
+  stopProgressPolling()
 })
 
-// 计算格式化后的进度
-const formattedProgress = computed(() => {
-  return parseFloat(uploadProgress.value).toFixed(1);
-})
+const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1)))
 </script>
 
 <style lang="scss" scoped>
@@ -204,7 +239,7 @@ const formattedProgress = computed(() => {
 
   :deep(.el-upload-dragger) {
     width: 100%;
-    height: 200px;
+    height: 220px;
     display: flex;
     flex-direction: column;
     justify-content: center;

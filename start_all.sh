@@ -51,7 +51,7 @@ prepare_backend() {
     npm install
   fi
 
-  mkdir -p uploads/images uploads/output uploads/preview temp
+  mkdir -p uploads/jobs temp
 }
 
 prepare_frontend() {

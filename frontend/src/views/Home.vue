@@ -34,6 +34,13 @@ const zipUrls = ref([])
 // 跟踪当前图片编号
 const currentImageNumber = ref(1)
 
+const buildZipFileName = (sourceName) => {
+    const safeName = (sourceName || 'images')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .trim()
+    return `${safeName || 'images'}.zip`
+}
+
 // 处理新提取的图片
 const handleImagesExtracted = (data) => {
     if (data.images && data.images.length > 0) {
@@ -56,7 +63,9 @@ const handleImagesExtracted = (data) => {
             zipUrls.value.push({
                 url: data.zipUrl,
                 name: data.source || '未命名文档',
-                count: data.images.length
+                count: data.images.length,
+                jobId: data.jobId || '',
+                fileName: buildZipFileName(data.source)
             })
         }
     }

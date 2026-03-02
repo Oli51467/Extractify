@@ -1,8 +1,14 @@
 <template>
     <div class="app">
         <header class="app-header">
-            <div class="container">
-                <h1 class="app-title">Extractify</h1>
+            <div class="container app-nav-row">
+                <router-link to="/" class="app-nav-link" :class="{ 'is-active': route.path === '/' }">
+                    Extractify
+                </router-link>
+                <span class="app-title-separator">|</span>
+                <router-link to="/mergify" class="app-nav-link" :class="{ 'is-active': route.path === '/mergify' }">
+                    Mergify
+                </router-link>
             </div>
         </header>
 
@@ -19,6 +25,12 @@
         </footer>
     </div>
 </template>
+
+<script setup>
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+</script>
 
 <style lang="scss">
 :root {
@@ -66,13 +78,35 @@ body {
         display: flex;
         justify-content: center;
     }
+}
 
-    h1.app-title {
-        font-size: 1.5rem;
-        font-weight: 500;
-        color: var(--primary-color);
-        text-align: center;
-    }
+.app-nav-row {
+    align-items: center;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+}
+
+.app-nav-link {
+    color: var(--text-secondary);
+    font-size: 1.5rem;
+    font-weight: 500;
+    text-decoration: none;
+    text-align: center;
+    transition: color 0.2s;
+}
+
+.app-nav-link:hover {
+    color: var(--primary-color);
+}
+
+.app-nav-link.is-active {
+    color: var(--primary-color);
+}
+
+.app-title-separator {
+    color: var(--text-tertiary);
+    font-size: 1.2rem;
 }
 
 .app-main {

@@ -5,6 +5,7 @@ import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import Home from './views/Home.vue'
+import Mergify from './views/Mergify.vue'
 
 // 创建路由
 const router = createRouter({
@@ -12,8 +13,13 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'Home',
+      name: 'Extractify',
       component: Home
+    },
+    {
+      path: '/mergify',
+      name: 'Mergify',
+      component: Mergify
     }
   ]
 })

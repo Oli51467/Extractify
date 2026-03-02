@@ -6,9 +6,12 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
 
 - 支持从Word文档(.docx, .doc)中提取图片
 - 支持从PDF文件中提取图片
-- 实时显示上传和处理进度
+- 任务级多用户隔离（按 jobId 独立目录，互不覆盖）
+- 轻量会话隔离（无登录，按浏览器会话 Cookie 绑定任务访问权限）
+- 实时显示上传和后端处理进度（基于真实任务状态）
 - 图片预览和搜索功能
 - 支持下载单个图片或所有图片的压缩包
+- 支持通过 LibreOffice 将 .doc 自动转换为 .docx 后提取
 - 响应式设计，适配各种设备
 
 ## 技术栈
@@ -41,7 +44,7 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
    # 前端依赖
    cd ../frontend && npm install
    # 必要目录
-   cd .. && mkdir -p backend/uploads/images backend/uploads/output backend/uploads/preview backend/temp
+   cd .. && mkdir -p backend/uploads/jobs backend/temp
    ```
 
 ## 使用说明
@@ -149,9 +152,7 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
    npm install
    
    # 创建必要的目录
-   mkdir -p uploads/images
-   mkdir -p uploads/output
-   mkdir -p uploads/preview
+   mkdir -p uploads/jobs
    mkdir -p temp
    
    # 设置目录权限
@@ -164,9 +165,16 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
    cat > .env << EOL
    PORT=13434
    NODE_ENV=production
-   UPLOAD_DIR=uploads
-   TEMP_DIR=temp
-   MAX_FILE_SIZE=50
+   CORS_ORIGINS=https://your-domain.com
+   MAX_FILE_SIZE_MB=50
+   USE_HELMET=true
+   UPLOAD_ROOT=uploads
+   JOBS_ROOT=uploads/jobs
+   TEMP_ROOT=temp
+   JOB_QUEUE_CONCURRENCY=2
+   JOB_RETENTION_HOURS=72
+   SESSION_COOKIE_SECURE=true
+   SOFFICE_PATH=/usr/bin/soffice
    EOL
    ```
 

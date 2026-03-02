@@ -1,36 +1,54 @@
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
+const helmet = require('helmet');
 const apiRoutes = require('./routes/api');
+const config = require('./config');
+const jobService = require('./services/jobService');
+const createSessionMiddleware = require('./middleware/sessionMiddleware');
+const uploadAuthMiddleware = require('./middleware/uploadAuthMiddleware');
 
 // 创建 Express 应用
 const app = express();
-const PORT = process.env.PORT || 13434;
+const PORT = config.server.port;
 
-// 确保上传和输出目录存在
-const uploadsDir = path.join(__dirname, 'uploads');
-const outputDir = path.join(__dirname, 'uploads', 'output');
-const previewDir = path.join(__dirname, 'uploads', 'preview');
+// 确保运行时目录存在
+config.ensureRuntimeDirs();
+app.disable('x-powered-by');
 
-[uploadsDir, outputDir, previewDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
+if (config.security.trustProxy) {
+  app.set('trust proxy', 1);
+}
 
 // 中间件
+if (config.security.useHelmet) {
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false
+  }));
+}
+
 app.use(cors({
-  origin: 'http://localhost:5173', // 前端开发服务器地址
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (config.cors.origins.includes('*') || config.cors.origins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS origin not allowed: ${origin}`));
+  },
   credentials: true,
-  exposedHeaders: ['Content-Disposition', 'Content-Type'] // 允许前端访问这些响应头
+  exposedHeaders: config.cors.exposedHeaders
 }));
+app.use(createSessionMiddleware(config));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // 静态文件服务
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', uploadAuthMiddleware, express.static(config.paths.uploadRoot, {
+  dotfiles: 'deny',
+  fallthrough: false,
+  index: false,
+  maxAge: '1h'
+}));
 
 // API 路由
 app.use('/api', apiRoutes);
@@ -45,44 +63,22 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 定期清理旧的图片目录（每天一次）
-const cleanupOldFiles = async () => {
-  try {
-    const imagesDir = path.join(__dirname, 'uploads/images');
-    
-    // 确保目录存在
-    if (!fs.existsSync(imagesDir)) return;
-    
-    const entries = fs.readdirSync(imagesDir, { withFileTypes: true });
-    const now = Date.now();
-    
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const dirPath = path.join(imagesDir, entry.name);
-        const stats = fs.statSync(dirPath);
-        
-        // 删除超过3天的目录
-        if (now - stats.birthtimeMs > 3 * 24 * 60 * 60 * 1000) {
-          await fs.promises.rm(dirPath, { recursive: true, force: true });
-          console.log(`已清理旧目录: ${dirPath}`);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('清理旧文件失败:', error);
-  }
-};
-
-// 每天执行一次清理
-setInterval(cleanupOldFiles, 24 * 60 * 60 * 1000);
-
-// 启动时也执行一次清理
-cleanupOldFiles();
+// 定期清理过期任务目录和任务元数据
+const cleanupTimer = setInterval(() => {
+  jobService.cleanupExpiredJobs().catch((error) => {
+    console.error('清理过期任务失败:', error);
+  });
+}, config.jobs.cleanupIntervalMs);
+cleanupTimer.unref();
+jobService.cleanupExpiredJobs().catch((error) => {
+  console.error('启动时清理过期任务失败:', error);
+});
 
 // 启动服务器
 const server = app.listen(PORT, () => {
   console.log(`服务器运行在 http://localhost:${PORT}`);
+  console.log(`CORS 允许来源: ${config.cors.origins.join(', ')}`);
 });
 
-// 增加全局超时设置
-server.timeout = 300000; // 5分钟 
+// 全局超时设置
+server.timeout = config.server.requestTimeoutMs;

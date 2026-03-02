@@ -11,7 +11,7 @@
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-for="(zip, index) in zipUrls" :key="index" :command="zip.url">
+              <el-dropdown-item v-for="(zip, index) in zipUrls" :key="index" :command="zip">
                 {{ zip.name }} ({{ zip.count }}张图片)
               </el-dropdown-item>
             </el-dropdown-menu>
@@ -119,21 +119,25 @@ const downloadImage = (image) => {
 }
 
 // 下载指定压缩包
-const handleZipDownload = (url) => {
-  downloadZip(url)
+const handleZipDownload = (zip) => {
+  if (!zip || !zip.url) {
+    ElMessage.warning('压缩包信息无效')
+    return
+  }
+  downloadZip(zip.url, zip.fileName)
 }
 
 // 下载所有图片（压缩包）
 const downloadAllImages = () => {
   if (props.zipUrls.length > 0) {
-    downloadZip(props.zipUrls[0].url)
+    downloadZip(props.zipUrls[0].url, props.zipUrls[0].fileName)
   } else {
     ElMessage.warning('没有可下载的压缩包')
   }
 }
 
 // 下载压缩包
-const downloadZip = (url) => {
+const downloadZip = (url, fileName = 'images.zip') => {
   fetch(url)
     .then(response => {
       if (!response.ok) {
@@ -146,7 +150,7 @@ const downloadZip = (url) => {
       const a = document.createElement('a')
       a.style.display = 'none'
       a.href = url
-      a.download = 'images.zip'
+      a.download = fileName || 'images.zip'
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
