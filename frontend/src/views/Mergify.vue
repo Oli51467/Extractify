@@ -1,13 +1,17 @@
 <template>
   <div class="mergify-page">
-    <el-card class="merge-card">
+    <WorkbenchSwitcher />
+
+    <AppCard class="merge-card">
       <ImageMerger />
-    </el-card>
+    </AppCard>
   </div>
 </template>
 
 <script setup>
 import ImageMerger from '../components/ImageMerger.vue'
+import AppCard from '../components/ui/AppCard.vue'
+import WorkbenchSwitcher from '../components/workspace/WorkbenchSwitcher.vue'
 </script>
 
 <style lang="scss" scoped>

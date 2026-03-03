@@ -4,6 +4,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
+const backendPort = process.env.BACKEND_PORT || '13434'
+const backendTarget = process.env.VITE_BACKEND_TARGET || `http://127.0.0.1:${backendPort}`
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [vue()],
@@ -15,11 +18,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:13434',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:13434',
+        target: backendTarget,
         changeOrigin: true,
       }
     }

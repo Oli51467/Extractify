@@ -13,7 +13,7 @@ const toNumber = (value, fallback, min = Number.NEGATIVE_INFINITY) => {
 };
 
 const parseOrigins = (rawOrigins) => {
-  if (!rawOrigins) return ['http://localhost:5173', 'http://localhost:18982'];
+  if (!rawOrigins) return ['http://localhost:*', 'http://127.0.0.1:*'];
   if (rawOrigins.trim() === '*') return ['*'];
   return rawOrigins
     .split(',')
@@ -70,17 +70,27 @@ const config = {
     imageDedupeEnabled: process.env.IMAGE_DEDUPE_ENABLED !== 'false',
     imageDedupeHammingThreshold: toNumber(process.env.IMAGE_DEDUPE_HAMMING_THRESHOLD, 6, 0),
     imageDedupeAspectTolerance: toNumber(process.env.IMAGE_DEDUPE_ASPECT_TOLERANCE, 0.03, 0)
+  },
+  database: {
+    file: resolvePathFromRoot(process.env.DB_FILE, path.join(ROOT_DIR, 'data', 'extractify.sqlite'))
   }
 };
 
 config.paths = {
   uploadRoot: resolvePathFromRoot(process.env.UPLOAD_ROOT, path.join(ROOT_DIR, 'uploads')),
   jobsRoot: resolvePathFromRoot(process.env.JOBS_ROOT, path.join(ROOT_DIR, 'uploads', 'jobs')),
-  tempRoot: resolvePathFromRoot(process.env.TEMP_ROOT, path.join(ROOT_DIR, 'temp'))
+  tempRoot: resolvePathFromRoot(process.env.TEMP_ROOT, path.join(ROOT_DIR, 'temp')),
+  dataRoot: resolvePathFromRoot(process.env.DATA_ROOT, path.join(ROOT_DIR, 'data'))
 };
 
 const ensureRuntimeDirs = () => {
-  [config.paths.uploadRoot, config.paths.jobsRoot, config.paths.tempRoot].forEach((dirPath) => {
+  [
+    config.paths.uploadRoot,
+    config.paths.jobsRoot,
+    config.paths.tempRoot,
+    config.paths.dataRoot,
+    path.dirname(config.database.file)
+  ].forEach((dirPath) => {
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
     }

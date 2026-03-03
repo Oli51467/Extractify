@@ -37,6 +37,26 @@ for (const workerPath of workerCandidates) {
   }
 }
 
+const standardFontDirCandidates = [
+  path.join(__dirname, '../node_modules/pdfjs-dist/standard_fonts'),
+  path.join(__dirname, '../../node_modules/pdfjs-dist/standard_fonts')
+];
+const standardFontDir = standardFontDirCandidates.find((dirPath) => fs.existsSync(dirPath)) || '';
+
+const buildPdfDocumentOptions = (uint8Array) => {
+  const options = {
+    data: uint8Array,
+    disableFontFace: true,
+    ignoreErrors: true
+  };
+
+  if (standardFontDir) {
+    options.standardFontDataUrl = `${standardFontDir}${path.sep}`;
+  }
+
+  return options;
+};
+
 const SOFFICE_CANDIDATES = [
   config.tools.sofficePath,
   process.env.SOFFICE_PATH,
@@ -594,11 +614,7 @@ async function extractImagesFromPdf(pdfPath, outputDir, reportStageProgress) {
     const dataBuffer = await fs.promises.readFile(pdfPath);
     const uint8Array = new Uint8Array(dataBuffer);
 
-    const loadingTask = pdfjsLib.getDocument({
-      data: uint8Array,
-      disableFontFace: true,
-      ignoreErrors: true
-    });
+    const loadingTask = pdfjsLib.getDocument(buildPdfDocumentOptions(uint8Array));
 
     const pdfDocument = await loadingTask.promise;
     const totalPages = pdfDocument.numPages;
@@ -738,11 +754,7 @@ async function renderPdfPagesToImages(pdfPath, outputDir, reportStageProgress) {
     const dataBuffer = await fs.promises.readFile(pdfPath);
     const uint8Array = new Uint8Array(dataBuffer);
 
-    const loadingTask = pdfjsLib.getDocument({
-      data: uint8Array,
-      disableFontFace: true,
-      ignoreErrors: true
-    });
+    const loadingTask = pdfjsLib.getDocument(buildPdfDocumentOptions(uint8Array));
 
     const pdfDocument = await loadingTask.promise;
     const totalPages = pdfDocument.numPages;

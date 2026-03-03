@@ -50,3 +50,5 @@ coverage/
 .npm
 .eslintcache
 .cache/ 
+
+tmp_*

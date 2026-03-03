@@ -1,77 +1,107 @@
 <template>
   <div class="merge-section">
-    <el-upload
-      ref="mergeUploadRef"
-      v-model:file-list="mergeFileList"
-      class="upload-area merge-upload-area"
-      drag
-      multiple
-      :auto-upload="false"
-      :show-file-list="true"
-      accept="image/*"
-      :on-change="handleMergeFileChange"
+    <div
+      class="merge-upload-area"
+      :class="{ 'is-dragging': dragHover }"
+      @click="openPicker"
+      @dragover.prevent="dragHover = true"
+      @dragleave.prevent="dragHover = false"
+      @drop.prevent="handleDrop"
     >
-      <el-icon class="el-icon--upload"><upload-filled /></el-icon>
-      <div class="el-upload__text">拖拽图片到此处或 <em>点击上传</em></div>
-      <template #tip>
-        <div class="el-upload__tip">支持 jpg、png、webp 等常见图片格式</div>
-      </template>
-    </el-upload>
+      <input
+        ref="mergeInputRef"
+        type="file"
+        multiple
+        accept="image/*"
+        @change="handleInputChange"
+      />
+      <AppIcon name="upload" class="upload-icon" />
+      <p class="upload-title">拖拽图片到此处或点击上传</p>
+      <p class="upload-tip">支持 jpg、png、webp 等常见图片格式</p>
+      <p v-if="mergeFileList.length > 0" class="upload-count">已选择 {{ mergeFileList.length }} 张图片</p>
+    </div>
 
     <div v-if="hasMergeItems" class="merge-settings">
       <div class="merge-settings-row">
         <div class="setting-item">
           <span class="setting-label">方向</span>
-          <el-radio-group v-model="mergeDirection">
-            <el-radio-button label="vertical">纵向</el-radio-button>
-            <el-radio-button label="horizontal">横向</el-radio-button>
-          </el-radio-group>
+          <div class="segmented-group">
+            <button
+              type="button"
+              class="segment-btn"
+              :class="{ 'is-active': mergeDirection === 'vertical' }"
+              @click="mergeDirection = 'vertical'"
+            >纵向</button>
+            <button
+              type="button"
+              class="segment-btn"
+              :class="{ 'is-active': mergeDirection === 'horizontal' }"
+              @click="mergeDirection = 'horizontal'"
+            >横向</button>
+          </div>
         </div>
-        <div class="setting-item">
+
+        <label class="setting-item">
           <span class="setting-label">间距(px)</span>
-          <el-input-number v-model="imageSpacing" :min="0" :max="200" :step="1" />
-        </div>
-        <div class="setting-item">
+          <input v-model.number="imageSpacing" type="number" min="0" max="200" />
+        </label>
+
+        <label class="setting-item">
           <span class="setting-label">背景色</span>
-          <el-color-picker v-model="backgroundColor" show-alpha />
-        </div>
+          <input v-model="backgroundColor" type="color" />
+        </label>
+
         <div class="setting-item">
           <span class="setting-label">水印</span>
-          <el-switch v-model="watermarkEnabled" />
+          <button
+            class="small-switch"
+            type="button"
+            role="switch"
+            :aria-checked="watermarkEnabled ? 'true' : 'false'"
+            @click="watermarkEnabled = !watermarkEnabled"
+          >
+            <span class="small-switch-track"><span class="small-switch-thumb" /></span>
+          </button>
         </div>
       </div>
 
       <div v-if="watermarkEnabled" class="merge-settings-row merge-settings-row--watermark">
-        <div class="setting-item setting-item--grow">
+        <label class="setting-item setting-item--grow">
           <span class="setting-label">水印文本</span>
-          <el-input v-model="watermarkText" placeholder="请输入水印文字" clearable />
-        </div>
-        <div class="setting-item">
+          <AppInput v-model="watermarkText" placeholder="请输入水印文字" clearable />
+        </label>
+
+        <label class="setting-item">
           <span class="setting-label">字体</span>
-          <el-input-number v-model="watermarkFontSize" :min="10" :max="160" :step="1" />
-        </div>
-        <div class="setting-item">
+          <input v-model.number="watermarkFontSize" type="number" min="10" max="160" />
+        </label>
+
+        <label class="setting-item setting-item--grow">
           <span class="setting-label">透明度</span>
-          <el-slider v-model="watermarkOpacity" :min="0" :max="1" :step="0.05" :show-tooltip="true" />
-        </div>
-        <div class="setting-item">
+          <input v-model.number="watermarkOpacity" type="range" min="0" max="1" step="0.05" />
+          <span class="setting-value">{{ watermarkOpacity.toFixed(2) }}</span>
+        </label>
+
+        <label class="setting-item">
           <span class="setting-label">颜色</span>
-          <el-color-picker v-model="watermarkColor" show-alpha />
-        </div>
-        <div class="setting-item">
+          <input v-model="watermarkColorHex" type="color" />
+        </label>
+
+        <label class="setting-item">
           <span class="setting-label">位置</span>
-          <el-select v-model="watermarkPosition" style="width: 130px">
-            <el-option label="左上" value="top-left" />
-            <el-option label="右上" value="top-right" />
-            <el-option label="居中" value="center" />
-            <el-option label="左下" value="bottom-left" />
-            <el-option label="右下" value="bottom-right" />
-          </el-select>
-        </div>
-        <div class="setting-item">
+          <select v-model="watermarkPosition">
+            <option value="top-left">左上</option>
+            <option value="top-right">右上</option>
+            <option value="center">居中</option>
+            <option value="bottom-left">左下</option>
+            <option value="bottom-right">右下</option>
+          </select>
+        </label>
+
+        <label class="setting-item">
           <span class="setting-label">边距(px)</span>
-          <el-input-number v-model="watermarkMargin" :min="0" :max="200" :step="1" />
-        </div>
+          <input v-model.number="watermarkMargin" type="number" min="0" max="200" />
+        </label>
       </div>
     </div>
 
@@ -92,13 +122,14 @@
           draggable="true"
           @dragstart="handleDragStart(index)"
           @dragover.prevent="handleDragOver(index)"
-          @drop.prevent="handleDrop(index)"
+          @drop.prevent="handleDropTo(index)"
           @dragend="handleDragEnd"
         >
-          <el-image :src="item.url" fit="cover" :preview-src-list="mergePreviewSrcList" :initial-index="index" />
+          <img :src="item.url" :alt="item.name" @click="openPreview(item.url)" />
           <div class="merge-preview-meta">
             <span class="merge-preview-index">{{ index + 1 }}</span>
             <span class="merge-preview-name">{{ item.name }}</span>
+            <button class="merge-remove" type="button" @click.stop="removeItem(index)">x</button>
           </div>
         </div>
       </div>
@@ -120,35 +151,45 @@
         <span>拼接结果（{{ mergedImageWidth }} × {{ mergedImageHeight }}）</span>
         <AppButton tone="success" variant="outline" @click="downloadMergedImage">
           <template #icon>
-            <Download />
+            <AppIcon name="download" />
           </template>
           下载长图
         </AppButton>
       </div>
-      <div class="merge-result-image">
-        <el-image :src="mergedImageUrl" fit="contain" :preview-src-list="[mergedImageUrl]" />
+      <div class="merge-result-image" @click="openPreview(mergedImageUrl)">
+        <img :src="mergedImageUrl" alt="merged" />
       </div>
     </div>
+
+    <AppModal v-model="previewVisible" title="图片预览" width="min(1100px, 94vw)">
+      <div class="preview-body">
+        <img v-if="previewUrl" :src="previewUrl" alt="preview" />
+      </div>
+    </AppModal>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { UploadFilled, Download } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { notify } from '../services/notify'
 import AppButton from './ui/AppButton.vue'
+import AppInput from './ui/AppInput.vue'
+import AppIcon from './ui/AppIcon.vue'
+import AppModal from './ui/AppModal.vue'
 
-const mergeUploadRef = ref(null)
+const createItemUid = () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+const mergeInputRef = ref(null)
 const mergeFileList = ref([])
 const mergeDirection = ref('vertical')
 const imageSpacing = ref(0)
 const backgroundColor = ref('#ffffff')
 
 const watermarkEnabled = ref(false)
-const watermarkText = ref('Extractify')
+const watermarkText = ref('DocPix Studio')
 const watermarkFontSize = ref(28)
 const watermarkOpacity = ref(0.25)
-const watermarkColor = ref('rgba(0, 0, 0, 1)')
+const watermarkColorHex = ref('#000000')
 const watermarkPosition = ref('bottom-right')
 const watermarkMargin = ref(24)
 
@@ -161,9 +202,12 @@ const mergePreviewItems = ref([])
 
 const dragSourceIndex = ref(-1)
 const dragOverIndex = ref(-1)
+const dragHover = ref(false)
+
+const previewVisible = ref(false)
+const previewUrl = ref('')
 
 const hasMergeItems = computed(() => mergeFileList.value.length > 0)
-const mergePreviewSrcList = computed(() => mergePreviewItems.value.map(item => item.url))
 
 const resetMergedResult = () => {
   if (mergedImageUrl.value) {
@@ -189,25 +233,24 @@ const syncMergePreviewItems = (files) => {
 
   mergePreviewItems.value = files
     .map((item, index) => {
-      if (item.raw) {
-        return {
-          uid: item.uid || `${item.name}-${index}`,
-          name: item.name,
-          url: URL.createObjectURL(item.raw),
-          revokeable: true
-        }
-      }
+      if (!item) return null
 
-      if (item.url) {
+      if (item.urlSource) {
         return {
-          uid: item.uid || `${item.name}-${index}`,
-          name: item.name,
-          url: item.url,
+          uid: item.uid || `${item.name || 'image'}-${index}`,
+          name: item.name || `image_${index + 1}`,
+          url: item.urlSource,
           revokeable: false
         }
       }
 
-      return null
+      if (!item.raw) return null
+      return {
+        uid: item.uid || `${item.name}-${index}`,
+        name: item.name,
+        url: URL.createObjectURL(item.raw),
+        revokeable: true
+      }
     })
     .filter(Boolean)
 }
@@ -225,6 +268,13 @@ const reorderMergeFiles = (fromIndex, toIndex) => {
   resetMergedResult()
 }
 
+const removeItem = (index) => {
+  if (index < 0 || index >= mergeFileList.value.length) return
+  mergeFileList.value = mergeFileList.value.filter((_, itemIndex) => itemIndex !== index)
+  syncMergePreviewItems(mergeFileList.value)
+  resetMergedResult()
+}
+
 const handleDragStart = (index) => {
   dragSourceIndex.value = index
 }
@@ -233,7 +283,7 @@ const handleDragOver = (index) => {
   dragOverIndex.value = index
 }
 
-const handleDrop = (index) => {
+const handleDropTo = (index) => {
   reorderMergeFiles(dragSourceIndex.value, index)
   dragSourceIndex.value = -1
   dragOverIndex.value = -1
@@ -244,36 +294,91 @@ const handleDragEnd = () => {
   dragOverIndex.value = -1
 }
 
-const handleMergeFileChange = (file, uploadFiles) => {
-  const validFiles = uploadFiles.filter(item => item.raw && item.raw.type.startsWith('image/'))
-  const hasInvalidFile = validFiles.length !== uploadFiles.length || (file.raw && !file.raw.type.startsWith('image/'))
+const parseFiles = (rawFiles) => {
+  const source = Array.from(rawFiles || [])
+  const validFiles = source.filter((file) => file.type && file.type.startsWith('image/'))
+  const hasInvalidFile = validFiles.length !== source.length
 
   if (hasInvalidFile) {
-    ElMessage.error('仅支持上传图片文件')
+    notify.warning('仅支持上传图片文件')
   }
 
-  mergeFileList.value = validFiles
+  return validFiles.map((file, index) => ({
+    uid: `${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`,
+    name: file.name,
+    raw: file
+  }))
+}
+
+const appendFiles = (rawFiles) => {
+  const items = parseFiles(rawFiles)
+  if (items.length === 0) return
+
+  mergeFileList.value = [...mergeFileList.value, ...items]
   syncMergePreviewItems(mergeFileList.value)
   resetMergedResult()
 }
 
-const loadImage = (rawFile) => {
+const openPicker = () => {
+  if (mergeInputRef.value) {
+    mergeInputRef.value.click()
+  }
+}
+
+const handleInputChange = (event) => {
+  appendFiles(event.target?.files)
+  if (mergeInputRef.value) {
+    mergeInputRef.value.value = ''
+  }
+}
+
+const handleDrop = (event) => {
+  dragHover.value = false
+  appendFiles(event.dataTransfer?.files)
+}
+
+const loadImageFromUrl = (url, fileName = 'image') => {
   return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(rawFile)
     const image = new Image()
 
     image.onload = () => {
-      URL.revokeObjectURL(objectUrl)
       resolve(image)
     }
 
     image.onerror = () => {
-      URL.revokeObjectURL(objectUrl)
-      reject(new Error(`无法读取图片：${rawFile.name}`))
+      reject(new Error(`无法读取图片：${fileName}`))
     }
 
-    image.src = objectUrl
+    image.src = url
   })
+}
+
+const loadImage = async (fileEntry) => {
+  if (fileEntry?.raw) {
+    const objectUrl = URL.createObjectURL(fileEntry.raw)
+    try {
+      return await loadImageFromUrl(objectUrl, fileEntry.name)
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
+  }
+
+  if (fileEntry?.urlSource) {
+    const response = await fetch(fileEntry.urlSource)
+    if (!response.ok) {
+      throw new Error(`无法下载图片：${fileEntry.name || 'unknown'}`)
+    }
+
+    const blob = await response.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    try {
+      return await loadImageFromUrl(objectUrl, fileEntry.name)
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+    }
+  }
+
+  throw new Error(`图片文件无效：${fileEntry?.name || 'unknown'}`)
 }
 
 const canvasToBlob = (canvas) => {
@@ -321,10 +426,10 @@ const drawWatermark = (context, canvas) => {
   context.save()
   context.font = `${fontSize}px sans-serif`
   context.textBaseline = 'top'
-  context.fillStyle = watermarkColor.value || 'rgba(0, 0, 0, 1)'
+  context.fillStyle = watermarkColorHex.value || '#000000'
   context.globalAlpha = opacity
 
-  const lineWidths = lines.map(line => context.measureText(line).width)
+  const lineWidths = lines.map((line) => context.measureText(line).width)
   const textWidth = Math.max(...lineWidths)
   const textHeight = lineHeight * lines.length
   const origin = getWatermarkOrigin(canvas, textWidth, textHeight, margin, watermarkPosition.value)
@@ -342,7 +447,7 @@ const drawWatermark = (context, canvas) => {
 
 const handleMergeImages = async () => {
   if (mergeFileList.value.length === 0) {
-    ElMessage.warning('请先上传至少一张图片')
+    notify.warning('请先上传至少一张图片')
     return
   }
 
@@ -351,10 +456,7 @@ const handleMergeImages = async () => {
   try {
     const loadedImages = await Promise.all(
       mergeFileList.value.map((file) => {
-        if (!file.raw) {
-          throw new Error(`图片文件无效：${file.name}`)
-        }
-        return loadImage(file.raw)
+        return loadImage(file)
       })
     )
 
@@ -364,12 +466,12 @@ const handleMergeImages = async () => {
     const canvas = document.createElement('canvas')
 
     canvas.width = isVertical
-      ? Math.max(...loadedImages.map(image => image.width))
+      ? Math.max(...loadedImages.map((image) => image.width))
       : loadedImages.reduce((sum, image) => sum + image.width, 0) + spacing * gapCount
 
     canvas.height = isVertical
       ? loadedImages.reduce((sum, image) => sum + image.height, 0) + spacing * gapCount
-      : Math.max(...loadedImages.map(image => image.height))
+      : Math.max(...loadedImages.map((image) => image.height))
 
     if (canvas.width > 32767 || canvas.height > 32767) {
       throw new Error('拼接结果尺寸过大，请减少图片数量或分辨率')
@@ -411,10 +513,10 @@ const handleMergeImages = async () => {
     mergedImageHeight.value = canvas.height
     mergedImageName.value = `merged_${mergeDirection.value}_${Date.now()}.png`
 
-    ElMessage.success('长图生成成功')
+    notify.success('长图生成成功')
   } catch (error) {
     console.error('拼接失败:', error)
-    ElMessage.error(error.message || '处理失败，请重试')
+    notify.error(error.message || '处理失败，请重试')
   } finally {
     isMergingImages.value = false
   }
@@ -422,7 +524,7 @@ const handleMergeImages = async () => {
 
 const downloadMergedImage = () => {
   if (!mergedImageUrl.value) {
-    ElMessage.warning('暂无可下载的长图')
+    notify.warning('暂无可下载的长图')
     return
   }
 
@@ -435,23 +537,66 @@ const downloadMergedImage = () => {
 }
 
 const clearMergeState = () => {
-  if (mergeUploadRef.value) {
-    mergeUploadRef.value.clearFiles()
-  }
   mergeFileList.value = []
   resetMergePreviewItems()
   resetMergedResult()
   dragSourceIndex.value = -1
   dragOverIndex.value = -1
+  previewVisible.value = false
+  previewUrl.value = ''
 }
 
-watch([mergeDirection, imageSpacing, backgroundColor, watermarkEnabled, watermarkText, watermarkFontSize, watermarkOpacity, watermarkColor, watermarkPosition, watermarkMargin], () => {
+const appendRemoteImages = (items = []) => {
+  const normalized = Array.isArray(items)
+    ? items
+      .map((item) => ({
+        uid: createItemUid(),
+        name: String(item?.name || 'imported_image').trim() || 'imported_image',
+        urlSource: String(item?.url || item?.path || '').trim()
+      }))
+      .filter((item) => item.urlSource)
+    : [];
+
+  if (normalized.length === 0) {
+    return 0
+  }
+
+  mergeFileList.value = [...mergeFileList.value, ...normalized]
+  syncMergePreviewItems(mergeFileList.value)
   resetMergedResult()
-})
+  return normalized.length
+}
+
+const openPreview = (url) => {
+  previewUrl.value = url
+  previewVisible.value = true
+}
+
+watch(
+  [
+    mergeDirection,
+    imageSpacing,
+    backgroundColor,
+    watermarkEnabled,
+    watermarkText,
+    watermarkFontSize,
+    watermarkOpacity,
+    watermarkColorHex,
+    watermarkPosition,
+    watermarkMargin
+  ],
+  () => {
+    resetMergedResult()
+  }
+)
 
 onUnmounted(() => {
   resetMergePreviewItems()
   resetMergedResult()
+})
+
+defineExpose({
+  appendRemoteImages
 })
 </script>
 
@@ -460,78 +605,184 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.upload-area {
-  width: 100%;
-
-  :deep(.el-upload) {
-    width: 100%;
-  }
-
-  :deep(.el-upload-dragger) {
-    width: 100%;
-    height: 200px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-  }
-}
-
 .merge-upload-area {
-  :deep(.el-upload-dragger) {
-    height: 180px;
-  }
+  align-items: center;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8ff 100%);
+  border: 1.5px dashed #c9d6ef;
+  border-radius: 14px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  justify-content: center;
+  min-height: 180px;
+  padding: 1rem;
+  text-align: center;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.el-icon--upload {
-  font-size: 48px;
-  color: var(--primary-color);
-  margin-bottom: 16px;
+.merge-upload-area:hover,
+.merge-upload-area.is-dragging {
+  border-color: #7ea2ef;
+  box-shadow: 0 18px 30px -26px rgba(35, 52, 86, 0.62);
+}
+
+.merge-upload-area input {
+  display: none;
+}
+
+.upload-icon {
+  color: #4f8cff;
+  font-size: 42px;
+}
+
+.upload-title {
+  color: #2d3b56;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.upload-tip,
+.upload-count {
+  color: #8a96ac;
+  font-size: 0.8rem;
+  margin: 0;
 }
 
 .merge-settings {
-  margin-top: 1rem;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
   background: #fff;
-  padding: 0.75rem;
+  border: 1px solid #e7edf8;
+  border-radius: 12px;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.75rem;
 }
 
 .merge-settings-row {
-  display: flex;
-  gap: 0.75rem;
   align-items: flex-end;
+  display: flex;
   flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .merge-settings-row--watermark {
-  border-top: 1px dashed #ebeef5;
+  border-top: 1px dashed #e6edf8;
   padding-top: 0.75rem;
 }
 
 .setting-item {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.35rem;
 }
 
 .setting-item--grow {
-  min-width: 220px;
   flex: 1;
+  min-width: 220px;
 }
 
 .setting-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+  color: #697a98;
+  font-size: 0.79rem;
+}
+
+.setting-item input,
+.setting-item select {
+  background: #fff;
+  border: 1px solid #d8e2f5;
+  border-radius: 10px;
+  color: #415472;
+  font-size: 13px;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.setting-item input[type='color'] {
+  min-width: 44px;
+  padding: 2px;
+}
+
+.setting-item input[type='range'] {
+  accent-color: #4f8cff;
+  min-height: auto;
+  padding: 0;
+}
+
+.setting-value {
+  color: #8793ab;
+  font-size: 12px;
+}
+
+.segmented-group {
+  background: #f2f6fd;
+  border: 1px solid #dbe4f7;
+  border-radius: 11px;
+  display: inline-flex;
+  padding: 2px;
+}
+
+.segment-btn {
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  color: #687a99;
+  cursor: pointer;
+  font-size: 13px;
+  min-height: 30px;
+  min-width: 58px;
+}
+
+.segment-btn.is-active {
+  background: #fff;
+  box-shadow: 0 8px 18px -14px rgba(44, 63, 98, 0.7);
+  color: #3f79f3;
+}
+
+.small-switch {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+.small-switch-track {
+  background: #c8d2e2;
+  border: 1px solid #bcc7d9;
+  border-radius: 999px;
+  display: inline-block;
+  height: 17px;
+  position: relative;
+  width: 30px;
+}
+
+.small-switch-thumb {
+  background: #fff;
+  border-radius: 999px;
+  box-shadow: 0 2px 5px rgba(48, 62, 92, 0.2);
+  height: 12px;
+  left: 1.5px;
+  position: absolute;
+  top: 1.5px;
+  transition: all 0.2s ease;
+  width: 12px;
+}
+
+.small-switch[aria-checked='true'] .small-switch-track {
+  background: #48b38d;
+  border-color: #3ea780;
+}
+
+.small-switch[aria-checked='true'] .small-switch-thumb {
+  left: calc(100% - 13.5px);
 }
 
 .merge-controls {
-  margin-top: 1rem;
   display: flex;
   justify-content: flex-end;
+  margin-top: 1rem;
 }
 
 .merge-actions {
@@ -540,49 +791,50 @@ onUnmounted(() => {
 }
 
 .merge-preview {
-  margin-top: 1rem;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
   background: #fff;
+  border: 1px solid #e7edf8;
+  border-radius: 12px;
+  margin-top: 1rem;
   padding: 0.75rem;
 }
 
 .merge-preview-header {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-  color: var(--text-primary);
-  font-size: 0.9rem;
+  color: #2f3d58;
+  display: flex;
   flex-wrap: wrap;
+  font-size: 0.9rem;
+  gap: 0.75rem;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
 }
 
 .merge-preview-tip {
-  color: var(--text-tertiary);
+  color: #8f9bb2;
   font-size: 0.8rem;
 }
 
 .merge-preview-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
 }
 
 .merge-preview-item {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  overflow: hidden;
-  background: #fafafa;
+  background: #fafbfd;
+  border: 1px solid #e7edf8;
+  border-radius: 10px;
   cursor: grab;
-  transition: border-color 0.2s, box-shadow 0.2s, opacity 0.2s;
+  overflow: hidden;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
 
-  .el-image {
-    display: block;
-    width: 100%;
-    height: 110px;
-    cursor: zoom-in;
-  }
+.merge-preview-item img {
+  cursor: zoom-in;
+  display: block;
+  height: 110px;
+  object-fit: cover;
+  width: 100%;
 }
 
 .merge-preview-item.is-drag-source {
@@ -590,72 +842,101 @@ onUnmounted(() => {
 }
 
 .merge-preview-item.is-drag-over {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.35);
+  border-color: #7ea3ef;
+  box-shadow: 0 0 0 2px rgba(64, 122, 241, 0.22);
 }
 
 .merge-preview-meta {
-  display: flex;
   align-items: center;
+  display: flex;
   gap: 0.4rem;
   padding: 0.4rem 0.5rem;
 }
 
 .merge-preview-index {
-  width: 1.25rem;
-  height: 1.25rem;
+  align-items: center;
+  background: #4f8cff;
   border-radius: 999px;
-  background: var(--primary-color);
   color: #fff;
-  text-align: center;
-  line-height: 1.25rem;
-  font-size: 0.75rem;
+  display: inline-flex;
   flex-shrink: 0;
+  font-size: 0.73rem;
+  height: 1.25rem;
+  justify-content: center;
+  width: 1.25rem;
 }
 
 .merge-preview-name {
+  color: #64738f;
+  flex: 1;
   font-size: 0.8rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-remove {
+  background: transparent;
+  border: 0;
+  color: #8f9ab0;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
 }
 
 .merge-result {
+  background: #fafbfd;
+  border: 1px solid #e7edf8;
+  border-radius: 12px;
   margin-top: 1rem;
   padding: 1rem;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  background: #fafafa;
 }
 
 .merge-result-header {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
+  display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+  justify-content: space-between;
   margin-bottom: 0.75rem;
 }
 
 .merge-result-image {
-  max-height: 500px;
-  overflow: auto;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  align-items: center;
   background: #fff;
+  border: 1px solid #e8edf6;
+  border-radius: 10px;
+  cursor: zoom-in;
+  display: flex;
+  justify-content: center;
+  max-height: 520px;
+  overflow: auto;
   padding: 0.5rem;
+}
 
-  .el-image {
-    display: block;
-    width: 100%;
-    cursor: zoom-in;
-  }
+.merge-result-image img {
+  max-width: 100%;
+}
 
-  :deep(.el-image__inner) {
-    max-width: 100%;
-    height: auto;
-    margin: 0 auto;
+.preview-body {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 220px;
+}
+
+.preview-body img {
+  border-radius: 10px;
+  box-shadow: 0 18px 34px -24px rgba(13, 22, 40, 0.7);
+  max-height: 80vh;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 720px) {
+  .merge-controls {
+    justify-content: flex-start;
   }
 }
 </style>

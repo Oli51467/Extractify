@@ -1,8 +1,12 @@
 const path = require('path');
 const fs = require('fs');
 const documentService = require('../services/documentService');
+const projectService = require('../services/projectService');
 const config = require('../config');
 const jobService = require('../services/jobService');
+const { normalizeUploadedFilename } = require('../utils/filename');
+
+const SUPPORTED_EXTENSIONS = ['.docx', '.doc', '.pdf'];
 
 const parseBooleanFlag = (value, defaultValue = true) => {
   if (value === undefined || value === null || value === '') return defaultValue;
@@ -12,164 +16,281 @@ const parseBooleanFlag = (value, defaultValue = true) => {
   return defaultValue;
 };
 
-// 处理上传的文档并提取图片
-exports.extractImages = async (req, res) => {
-  const jobId = req.jobId || jobService.sanitizeJobId(req.headers['x-job-id']);
-  const sessionId = req.sessionId;
-  const dedupeEnabled = parseBooleanFlag(req.body?.dedupe, config.processing.imageDedupeEnabled);
-  req.setTimeout(config.server.requestTimeoutMs);
+const toUserError = (error, code = '', statusCode = 500) => {
+  const next = new Error(error?.message || '处理失败');
+  next.code = code || error?.code || '';
+  next.statusCode = statusCode;
+  return next;
+};
 
+const validateFileType = (filePath) => {
+  const fileExt = path.extname(filePath || '').toLowerCase();
+  if (!SUPPORTED_EXTENSIONS.includes(fileExt)) {
+    throw toUserError(
+      new Error('不支持的文件类型，仅支持 .docx、.doc 和 .pdf 文件'),
+      'UNSUPPORTED_FILE_TYPE',
+      400
+    );
+  }
+  return fileExt;
+};
+
+const safeSegment = (value, fallback = 'unknown') => {
+  const next = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 100);
+  return next || fallback;
+};
+
+const ensureOutputDir = (jobId, projectId = '') => {
+  const outputDir = projectId
+    ? path.join(config.paths.uploadRoot, 'projects', safeSegment(projectId, 'project'), 'runs', safeSegment(jobId, 'job'), 'images')
+    : path.join(config.paths.jobsRoot, jobId, 'images');
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+  return outputDir;
+};
+
+const buildSuccessMessage = (result) => {
+  if (!result || !Array.isArray(result.images)) return '图片提取成功';
+  if (result.images.length === 0) return '文档中未找到图片';
+  if (result.dedupe && Number(result.dedupe.dedupedCount || 0) > 0) {
+    return `图片提取成功，共 ${result.images.length} 张（已去重 ${result.dedupe.dedupedCount} 张）`;
+  }
+  return `图片提取成功，共 ${result.images.length} 张`;
+};
+
+const persistRunState = (runContext, patch = {}) => {
+  if (!runContext || !runContext.projectId || !runContext.runId) return;
   try {
-    if (!req.file) {
-      jobService.updateJob(jobId, {
-        status: 'failed',
-        progress: 100,
-        message: '没有上传文件'
-      }, sessionId);
-      return res.status(400).json({
-        success: false,
-        message: '没有上传文件',
-        jobId
+    projectService.updateRun(runContext.sessionId, runContext.projectId, runContext.runId, patch);
+  } catch (error) {
+    // 历史写入失败不影响主链路
+    console.error('更新运行历史失败:', error);
+  }
+};
+
+const processExtractionTask = async (options = {}) => {
+  const sessionId = String(options.sessionId || '');
+  const jobId = jobService.sanitizeJobId(options.jobId || '');
+  const file = options.file;
+  const dedupeEnabled = parseBooleanFlag(options.dedupeEnabled, config.processing.imageDedupeEnabled);
+  const projectId = String(options.projectId || '').trim();
+  const batchId = String(options.batchId || '').trim();
+  const sourceNameOverride = String(options.sourceName || '').trim();
+  const documentIdHint = String(options.documentId || '').trim();
+  const originalNameOverride = String(options.originalFilename || '').trim();
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+
+  if (!file || !file.path) {
+    throw toUserError(new Error('没有上传文件'), 'EMPTY_FILE', 400);
+  }
+
+  const inputFilePath = file.path;
+  const fileExt = validateFileType(inputFilePath);
+  const originalName = normalizeUploadedFilename(
+    originalNameOverride || file.originalname || path.basename(inputFilePath),
+    path.basename(inputFilePath)
+  );
+  const sourceName = normalizeUploadedFilename(
+    sourceNameOverride || path.basename(originalName, path.extname(originalName)),
+    '未命名文档'
+  );
+
+  jobService.updateJob(jobId, {
+    status: 'uploaded',
+    progress: 10,
+    message: '文件上传完成，等待处理...',
+    sourceFileName: originalName,
+    fileType: fileExt,
+    dedupeEnabled
+  }, sessionId);
+
+  const outputDir = ensureOutputDir(jobId, projectId);
+
+  let runContext = null;
+  if (projectId) {
+    projectService.assertProjectOwnedBySession(sessionId, projectId);
+    const document = documentIdHint
+      ? projectService.getDocumentById(sessionId, projectId, documentIdHint)
+      : projectService.createDocument(sessionId, projectId, {
+        jobId,
+        sourceName,
+        originalFilename: originalName,
+        fileType: fileExt,
+        fileSize: Number(file.size || 0),
+        storagePath: inputFilePath
       });
+
+    if (!document) {
+      throw toUserError(new Error('文档不存在或无权限访问'), 'DOCUMENT_NOT_FOUND', 404);
     }
 
-    const inputFilePath = req.file.path;
-    const fileName = path.basename(req.file.originalname || inputFilePath, path.extname(inputFilePath));
-    const fileExt = path.extname(inputFilePath).toLowerCase();
-
-    jobService.updateJob(jobId, {
-      status: 'uploaded',
+    const run = projectService.createRun(sessionId, projectId, {
+      jobId,
+      batchId,
+      documentId: document.id,
+      sourceName,
+      status: 'queued',
       progress: 10,
       message: '文件上传完成，等待处理...',
-      sourceFileName: req.file.originalname || '',
-      fileType: fileExt,
-      dedupeEnabled
+      params: {
+        dedupeEnabled
+      }
+    });
+
+    runContext = {
+      sessionId,
+      projectId,
+      runId: run.id,
+      documentId: document.id,
+      sourceName
+    };
+  }
+
+  try {
+    const result = await jobService.enqueueJob(jobId, (reportProgress) => {
+      const reportAll = (patch) => {
+        reportProgress(patch);
+        persistRunState(runContext, patch);
+        if (onProgress) onProgress(patch);
+      };
+
+      reportAll({
+        status: 'processing',
+        progress: 20,
+        message: `开始处理文档：${sourceName}`
+      });
+
+      return documentService.extractImages(inputFilePath, outputDir, {
+        enableDedupe: dedupeEnabled,
+        onProgress: reportAll
+      });
+    }, 15);
+
+    const successMessage = buildSuccessMessage(result);
+    jobService.updateJob(jobId, {
+      status: 'completed',
+      progress: 100,
+      message: successMessage,
+      result: {
+        imageCount: result.images.length,
+        zipUrl: result.zipPath || '',
+        dedupe: result.dedupe || null
+      }
     }, sessionId);
 
-    // 检查文件类型
-    if (!['.docx', '.doc', '.pdf'].includes(fileExt)) {
-      jobService.updateJob(jobId, {
-        status: 'failed',
-        progress: 100,
-        message: '不支持的文件类型'
-      }, sessionId);
-      return res.status(400).json({
-        success: false,
-        message: '不支持的文件类型，仅支持 .docx、.doc 和 .pdf 文件',
-        jobId
-      });
-    }
-
-    // 每个任务独立输出目录，避免多用户互相覆盖
-    const outputDir = path.join(config.paths.jobsRoot, jobId, 'images');
-
-    // 确保输出目录存在
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    try {
-      const result = await jobService.enqueueJob(jobId, (reportProgress) => {
-        reportProgress({
-          status: 'processing',
-          progress: 20,
-          message: `开始处理文档：${fileName}`
-        });
-
-        return documentService.extractImages(inputFilePath, outputDir, {
-          enableDedupe: dedupeEnabled,
-          onProgress: reportProgress
-        });
-      }, 15);
-
-      if (result.images.length === 0) {
-        jobService.updateJob(jobId, {
-          status: 'completed',
-          progress: 100,
-          message: '文档中未找到图片',
-          result: {
-            imageCount: 0,
-            zipUrl: '',
-            dedupe: result.dedupe || null
-          }
-        }, sessionId);
-
-        return res.json({
-          success: true,
-          message: '文档中未找到图片',
-          images: [],
-          zipUrl: '',
-          dedupe: result.dedupe || null,
-          jobId
-        });
-      }
-
-      jobService.updateJob(jobId, {
+    if (runContext) {
+      persistRunState(runContext, {
         status: 'completed',
         progress: 100,
-        message: result.dedupe && result.dedupe.dedupedCount > 0
-          ? `图片提取成功，共 ${result.images.length} 张（已去重 ${result.dedupe.dedupedCount} 张）`
-          : `图片提取成功，共 ${result.images.length} 张`,
+        message: successMessage,
         result: {
           imageCount: result.images.length,
-          zipUrl: result.zipPath,
+          zipUrl: result.zipPath || '',
           dedupe: result.dedupe || null
-        }
-      }, sessionId);
-
-      res.json({
-        success: true,
-        message: '图片提取成功',
-        images: result.images,
-        zipUrl: result.zipPath,
-        dedupe: result.dedupe || null,
-        jobId
+        },
+        finishedAt: new Date().toISOString()
       });
-    } catch (extractError) {
-      console.error('图片提取过程错误:', extractError);
 
-      if (extractError.code === 'JOB_QUEUE_FULL') {
-        return res.status(429).json({
-          success: false,
-          message: extractError.message,
-          jobId
-        });
+      try {
+        projectService.replaceRunAssets(
+          sessionId,
+          runContext.projectId,
+          runContext.runId,
+          {
+            images: result.images || [],
+            sourceName: runContext.sourceName,
+            documentId: runContext.documentId,
+            jobId
+          }
+        );
+      } catch (assetError) {
+        console.error('保存图片追溯记录失败:', assetError);
       }
-
-      jobService.updateJob(jobId, {
-        status: 'failed',
-        progress: 100,
-        message: extractError.message || '图片提取失败',
-        error: extractError.toString()
-      }, sessionId);
-
-      return res.status(500).json({
-        success: false,
-        message: extractError.message || '图片提取失败',
-        error: extractError.toString(),
-        jobId
-      });
     }
+
+    return {
+      jobId,
+      fileExt,
+      sourceName,
+      result,
+      projectId: runContext ? runContext.projectId : '',
+      runId: runContext ? runContext.runId : '',
+      documentId: runContext ? runContext.documentId : ''
+    };
   } catch (error) {
-    console.error('图片提取控制器错误:', error);
     jobService.updateJob(jobId, {
       status: 'failed',
       progress: 100,
       message: error.message || '图片提取失败',
-      error: error.message
+      error: error.toString()
     }, sessionId);
 
-    res.status(500).json({
+    persistRunState(runContext, {
+      status: 'failed',
+      progress: 100,
+      message: error.message || '图片提取失败',
+      error: error.toString(),
+      finishedAt: new Date().toISOString()
+    });
+
+    throw error;
+  }
+};
+
+// 处理上传的文档并提取图片
+const extractImages = async (req, res) => {
+  const jobId = req.jobId || jobService.sanitizeJobId(req.headers['x-job-id']);
+  const sessionId = req.sessionId;
+  const dedupeEnabled = parseBooleanFlag(req.body?.dedupe, config.processing.imageDedupeEnabled);
+  const projectId = String(req.body?.projectId || req.params?.projectId || '').trim();
+  req.setTimeout(config.server.requestTimeoutMs);
+
+  try {
+    const task = await processExtractionTask({
+      sessionId,
+      jobId,
+      file: req.file,
+      dedupeEnabled,
+      projectId
+    });
+
+    const images = task.result.images || [];
+    return res.json({
+      success: true,
+      message: images.length > 0 ? '图片提取成功' : '文档中未找到图片',
+      images,
+      zipUrl: task.result.zipPath || '',
+      dedupe: task.result.dedupe || null,
+      projectId: task.projectId || '',
+      runId: task.runId || '',
+      documentId: task.documentId || '',
+      jobId: task.jobId
+    });
+  } catch (error) {
+    if (error.code === 'JOB_QUEUE_FULL') {
+      return res.status(429).json({
+        success: false,
+        message: error.message,
+        jobId
+      });
+    }
+
+    const statusCode = Number(error.statusCode) || (error.code === 'PROJECT_NOT_FOUND' ? 404 : 500);
+    return res.status(statusCode).json({
       success: false,
-      message: '图片提取失败',
-      error: error.message,
+      message: error.message || '图片提取失败',
+      error: error.toString(),
       jobId
     });
   }
 };
 
 // 获取任务状态（用于真实进度展示）
-exports.getJobStatus = (req, res) => {
+const getJobStatus = (req, res) => {
   const job = jobService.getJob(req.params.jobId, req.sessionId);
   if (!job) {
     return res.status(404).json({
@@ -185,7 +306,7 @@ exports.getJobStatus = (req, res) => {
 };
 
 // 下载图片压缩包
-exports.downloadImages = (req, res) => {
+const downloadImages = (req, res) => {
   try {
     const rawJobId = req.query.jobId || req.params.jobId || '';
     const jobId = jobService.sanitizeJobId(rawJobId);
@@ -227,4 +348,12 @@ exports.downloadImages = (req, res) => {
       error: error.message
     });
   }
-}; 
+};
+
+module.exports = {
+  parseBooleanFlag,
+  processExtractionTask,
+  extractImages,
+  getJobStatus,
+  downloadImages
+};

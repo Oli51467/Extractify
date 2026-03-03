@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const apiRoutes = require('./routes/api');
 const config = require('./config');
 const jobService = require('./services/jobService');
+const { getDb } = require('./services/dbService');
 const createSessionMiddleware = require('./middleware/sessionMiddleware');
 const uploadAuthMiddleware = require('./middleware/uploadAuthMiddleware');
 
@@ -11,8 +12,22 @@ const uploadAuthMiddleware = require('./middleware/uploadAuthMiddleware');
 const app = express();
 const PORT = config.server.port;
 
+const originMatchesRule = (origin, rule) => {
+  if (!origin || !rule) return false;
+  if (rule === '*') return true;
+  if (rule === origin) return true;
+
+  if (rule.endsWith(':*')) {
+    const prefix = rule.slice(0, -1);
+    return origin.startsWith(prefix);
+  }
+
+  return false;
+};
+
 // 确保运行时目录存在
 config.ensureRuntimeDirs();
+getDb();
 app.disable('x-powered-by');
 
 if (config.security.trustProxy) {
@@ -30,7 +45,8 @@ if (config.security.useHelmet) {
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    if (config.cors.origins.includes('*') || config.cors.origins.includes(origin)) {
+    const allowed = config.cors.origins.some((rule) => originMatchesRule(origin, rule));
+    if (allowed) {
       return callback(null, true);
     }
     return callback(new Error(`CORS origin not allowed: ${origin}`));

@@ -1,119 +1,247 @@
 <template>
-    <div class="home">
-        <el-card class="upload-card">
-            <FileUpload @images-extracted="handleImagesExtracted" />
-        </el-card>
+  <div class="workspace">
+    <ProjectSidebar
+      :projects="projects"
+      :selected-project-id="selectedProjectId"
+      :workspace-type="workspaceType"
+      @create-project="createProjectFromInput"
+      @select-project="handleSelectProject"
+      @refresh-project="refreshCurrentProject"
+      @rename-project="renameCurrentProject"
+      @delete-project="deleteCurrentProject"
+    />
 
-        <el-card v-if="allImages.length > 0" class="gallery-card">
-            <template #header>
-                <div class="card-header">
-                    <div class="header-content">
-                        <h2>图片预览 (共{{ allImages.length }}张)</h2>
-                        <AppButton
-                            tone="danger"
-                            variant="ghost"
-                            size="sm"
-                            shape="circle"
-                            @click="clearAllImages"
-                            title="清空所有图片"
-                        >
-                            <template #icon>
-                                <Delete />
-                            </template>
-                        </AppButton>
-                    </div>
-                </div>
-            </template>
-            <ImageGallery :images="allImages" :zip-urls="zipUrls" />
-        </el-card>
-    </div>
+    <section class="workspace-main">
+      <template v-if="isMergifyWorkbench">
+        <AppCard class="merge-workbench-card">
+          <template #header>
+            <div class="merge-workbench-header">
+              <div class="merge-workbench-title">文档合并</div>
+              <AppButton
+                size="sm"
+                variant="outline"
+                tone="neutral"
+                @click="handleImportFromExtractProject"
+              >
+                <template #icon>
+                  <AppIcon name="upload" />
+                </template>
+                Import from Extract
+              </AppButton>
+            </div>
+          </template>
+          <ImageMerger ref="imageMergerRef" />
+        </AppCard>
+      </template>
+      <template v-else>
+        <WorkspaceTabs
+          v-if="selectedProject"
+          :tabs="tabs"
+          v-model:active-tab="activeTab"
+        />
+
+        <template v-if="selectedProject">
+          <DocumentsTab
+            v-if="activeTab === 'documents'"
+            :project-id="selectedProject.id"
+            :project-documents="projectDocuments"
+            :selected-batch-file-count="selectedBatchFileCount"
+            :batch-file-input-key="batchFileInputKey"
+            :batch-submitting="batchSubmitting"
+            v-model:batch-dedupe-enabled="batchDedupeEnabled"
+            @single-extracted="handleSingleExtracted"
+            @batch-files-change="handleBatchFilesChange"
+            @create-batch="submitBatch"
+          />
+
+          <AssetsTab
+            v-else-if="activeTab === 'assets'"
+            :gallery-images="galleryImages"
+            :zip-urls="zipUrls"
+          />
+
+          <HistoryTab
+            v-else-if="activeTab === 'history'"
+            :project-runs="projectRuns"
+          />
+
+          <BatchesTab
+            v-else
+            :project-batches="projectBatches"
+            :expanded-batch-id="expandedBatchId"
+            :expanded-batch-items="expandedBatchItems"
+            @toggle-detail="toggleBatchDetail"
+            @retry-batch="retryBatchFailed"
+            @cancel-batch="cancelBatchQueued"
+          />
+        </template>
+
+        <div v-else class="project-empty">
+          <AppEmpty description="请先创建或选择项目" />
+        </div>
+      </template>
+    </section>
+  </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import FileUpload from '../components/FileUpload.vue'
-import ImageGallery from '../components/ImageGallery.vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { useProjectWorkspace } from '../composables/useProjectWorkspace'
+import { fetchProjects as fetchWorkspaceProjects, fetchProjectAssets } from '../services/projectApi'
+import { notify } from '../services/notify'
+import { openPromptDialog } from '../services/dialog'
+import ProjectSidebar from '../components/workspace/ProjectSidebar.vue'
+import WorkspaceTabs from '../components/workspace/WorkspaceTabs.vue'
+import DocumentsTab from '../components/workspace/DocumentsTab.vue'
+import AssetsTab from '../components/workspace/AssetsTab.vue'
+import HistoryTab from '../components/workspace/HistoryTab.vue'
+import BatchesTab from '../components/workspace/BatchesTab.vue'
+import ImageMerger from '../components/ImageMerger.vue'
+import AppCard from '../components/ui/AppCard.vue'
 import AppButton from '../components/ui/AppButton.vue'
-import { Delete } from '@element-plus/icons-vue'
+import AppIcon from '../components/ui/AppIcon.vue'
+import AppEmpty from '../components/ui/AppEmpty.vue'
 
-// 存储所有图片和压缩包URL
-const allImages = ref([])
-const zipUrls = ref([])
-// 跟踪当前图片编号
-const currentImageNumber = ref(1)
+const route = useRoute()
+const workspaceType = computed(() => route.path === '/mergify' ? 'merge' : 'extract')
+const imageMergerRef = ref(null)
 
-const buildZipFileName = (sourceName) => {
-    const safeName = (sourceName || 'images')
-        .replace(/[\\/:*?"<>|]/g, '_')
-        .trim()
-    return `${safeName || 'images'}.zip`
-}
+const {
+  tabs,
+  projects,
+  selectedProjectId,
+  selectedProject,
+  activeTab,
+  projectDocuments,
+  projectRuns,
+  projectBatches,
+  galleryImages,
+  zipUrls,
+  selectedBatchFileCount,
+  batchFileInputKey,
+  batchDedupeEnabled,
+  batchSubmitting,
+  expandedBatchId,
+  expandedBatchItems,
+  createProjectFromInput,
+  renameCurrentProject,
+  deleteCurrentProject,
+  refreshCurrentProject,
+  setBatchFiles,
+  submitBatch,
+  toggleBatchDetail,
+  retryBatchFailed,
+  cancelBatchQueued,
+  handleSingleExtracted
+} = useProjectWorkspace(workspaceType)
 
-// 处理新提取的图片
-const handleImagesExtracted = (data) => {
-    if (data.images && data.images.length > 0) {
-        // 使用简单的数字序列为图片编号
-        const newImages = data.images.map((img) => {
-            const imageId = currentImageNumber.value++
-            return {
-                ...img,
-                id: imageId, // 使用简单的数字编号
-                name: img.name.replace(/^image_\d+_\d+_\d+/, `image_${imageId}`), // 更新文件名中的编号
-                source: data.source || '未命名文档'
-            }
-        })
+const isMergifyWorkbench = computed(() => route.path === '/mergify')
 
-        // 添加新图片到列表
-        allImages.value = [...allImages.value, ...newImages]
-
-        // 添加新的压缩包URL
-        if (data.zipUrl) {
-            zipUrls.value.push({
-                url: data.zipUrl,
-                name: data.source || '未命名文档',
-                count: data.images.length,
-                jobId: data.jobId || '',
-                fileName: buildZipFileName(data.source)
-            })
-        }
+const handleImportFromExtractProject = async () => {
+  try {
+    const extractProjects = await fetchWorkspaceProjects('extract')
+    if (!extractProjects.length) {
+      notify.warning('暂无可导入素材的解析项目')
+      return
     }
+
+    let sourceProject = extractProjects[0]
+    if (extractProjects.length > 1) {
+      const candidateList = extractProjects.slice(0, 12)
+      const message = `Enter the extract project index to import: ${candidateList
+        .map((project, index) => `${index + 1}. ${project.name}`)
+        .join(' ｜ ')}`
+
+      const result = await openPromptDialog({
+        title: 'Import Extract Assets',
+        message,
+        defaultValue: '1',
+        confirmText: 'Import'
+      })
+      if (!result?.confirmed) return
+
+      const selectedIndex = Number(result.value) - 1
+      if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= candidateList.length) {
+        notify.warning('输入的序号无效')
+        return
+      }
+      sourceProject = candidateList[selectedIndex]
+    }
+
+    const assets = await fetchProjectAssets(sourceProject.id, 1000)
+    const imported = imageMergerRef.value?.appendRemoteImages(
+      assets
+        .filter((asset) => asset?.path)
+        .map((asset) => ({
+          name: asset.name || 'imported_image',
+          url: asset.path
+        }))
+    ) || 0
+
+    if (imported > 0) {
+      notify.success(`已从「${sourceProject.name}」导入 ${imported} 张素材`)
+    } else {
+      notify.warning('该项目暂无可导入素材')
+    }
+  } catch (error) {
+    notify.error(error.message || '导入解析素材失败')
+  }
 }
 
-// 清空所有图片
-const clearAllImages = () => {
-    allImages.value = []
-    zipUrls.value = []
-    // 重置图片编号
-    currentImageNumber.value = 1
+const handleSelectProject = (projectId) => {
+  selectedProjectId.value = projectId
+}
+
+const handleBatchFilesChange = (files) => {
+  setBatchFiles(files)
 }
 </script>
 
 <style lang="scss" scoped>
-.home {
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
+.workspace {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 1rem;
 }
 
-.card-header {
-    margin-bottom: 1rem;
-
-    h2 {
-        margin: 0;
-        font-weight: 500;
-        color: var(--text-primary);
-    }
+.workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
 }
 
-.header-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+.merge-workbench-card {
+  width: 100%;
 }
 
-.upload-card,
-.gallery-card {
-    border-radius: 8px;
-    box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+.merge-workbench-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+
+.merge-workbench-title {
+  color: #2d3b56;
+  font-size: 0.96rem;
+  font-weight: 600;
+}
+
+.project-empty {
+  min-height: 420px;
+  border: 1px dashed #d6e0f2;
+  border-radius: 12px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

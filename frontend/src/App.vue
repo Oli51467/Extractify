@@ -1,14 +1,10 @@
 <template>
     <div class="app">
         <header class="app-header">
-            <div class="container app-nav-row">
-                <router-link to="/" class="app-nav-link" :class="{ 'is-active': route.path === '/' }">
-                    Extractify
-                </router-link>
-                <span class="app-title-separator">|</span>
-                <router-link to="/mergify" class="app-nav-link" :class="{ 'is-active': route.path === '/mergify' }">
-                    Mergify
-                </router-link>
+            <div class="container app-brand-row">
+                <h1 class="app-brand">
+                    <AppBrandLogo />
+                </h1>
             </div>
         </header>
 
@@ -20,16 +16,19 @@
 
         <footer class="app-footer">
             <div class="container">
-                <p>© {{ new Date().getFullYear() }} Extractify</p>
+                <p>© {{ new Date().getFullYear() }} DocPix Studio</p>
             </div>
         </footer>
+
+        <AppToastViewport />
+        <AppDialogHost />
     </div>
 </template>
 
 <script setup>
-import { useRoute } from 'vue-router'
-
-const route = useRoute()
+import AppToastViewport from './components/ui/AppToastViewport.vue'
+import AppDialogHost from './components/ui/AppDialogHost.vue'
+import AppBrandLogo from './components/ui/AppBrandLogo.vue'
 </script>
 
 <style lang="scss">
@@ -72,7 +71,7 @@ body {
 .app-header {
     background-color: #fff;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    padding: 1rem 0;
+    padding: 0.9rem 0;
 
     .container {
         display: flex;
@@ -80,38 +79,27 @@ body {
     }
 }
 
-.app-nav-row {
+.app-brand-row {
     align-items: center;
     display: flex;
-    gap: 0.75rem;
     justify-content: center;
 }
 
-.app-nav-link {
-    color: var(--text-secondary);
-    font-size: 1.5rem;
-    font-weight: 500;
-    text-decoration: none;
-    text-align: center;
-    transition: color 0.2s;
-}
-
-.app-nav-link:hover {
-    color: var(--primary-color);
-}
-
-.app-nav-link.is-active {
-    color: var(--primary-color);
-}
-
-.app-title-separator {
-    color: var(--text-tertiary);
-    font-size: 1.2rem;
+.app-brand {
+    align-items: center;
+    display: inline-flex;
+    line-height: 1;
+    margin: 0;
 }
 
 .app-main {
     flex: 1;
     padding: 2rem 0;
+}
+
+.app-main .container {
+    max-width: min(1680px, calc(100vw - 56px));
+    padding: 0;
 }
 
 .app-footer {
@@ -120,5 +108,11 @@ body {
     text-align: center;
     color: var(--text-tertiary);
     font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+    .app-main .container {
+        max-width: calc(100vw - 24px);
+    }
 }
 </style>

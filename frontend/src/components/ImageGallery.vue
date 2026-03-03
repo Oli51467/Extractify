@@ -2,21 +2,19 @@
   <div class="image-gallery">
     <div class="gallery-header">
       <div class="gallery-actions">
-        <el-dropdown v-if="zipUrls.length > 0" @command="handleZipDownload">
-          <AppButton tone="primary" variant="outline">
+        <div v-if="zipUrls.length > 0" class="zip-actions">
+          <select v-model.number="selectedZipIndex" class="zip-select">
+            <option v-for="(zip, index) in zipUrls" :key="zip.url || index" :value="index">
+              {{ zip.name }} ({{ zip.count }}张)
+            </option>
+          </select>
+          <AppButton tone="primary" variant="outline" size="sm" @click="downloadSelectedZip">
             <template #icon>
-              <Download />
+              <AppIcon name="download" />
             </template>
-            下载 <ArrowDown class="app-inline-arrow" />
+            下载
           </AppButton>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item v-for="(zip, index) in zipUrls" :key="index" :command="zip">
-                {{ zip.name }} ({{ zip.count }}张图片)
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        </div>
 
         <AppButton
           tone="success"
@@ -25,24 +23,23 @@
           @click="buildOcrIndex"
         >
           <template #icon>
-            <Search />
+            <AppIcon name="search" />
           </template>
           {{ ocrButtonText }}
         </AppButton>
       </div>
 
       <div class="gallery-filter">
-        <el-input
-          v-model="searchQuery"
-          placeholder="按文件名 / 来源 / OCR 文字搜索..."
-          :prefix-icon="Search"
-          clearable
-        />
+        <AppInput v-model="searchQuery" placeholder="按文件名 / 来源 / OCR 文字搜索..." clearable>
+          <template #prefix>
+            <AppIcon name="search" />
+          </template>
+        </AppInput>
       </div>
     </div>
 
     <div v-if="ocrStatus" class="ocr-status">
-      <el-progress v-if="ocrIndexing" :percentage="ocrProgress" :stroke-width="8" />
+      <AppProgress v-if="ocrIndexing" :percentage="ocrProgress" />
       <p>{{ ocrStatus }}</p>
       <p v-if="!ocrIndexing && pendingOcrCount > 0" class="ocr-hint">
         还有 {{ pendingOcrCount }} 张图片未建立 OCR 索引，可继续补全。
@@ -66,7 +63,7 @@
               title="下载"
             >
               <template #icon>
-                <Download />
+                <AppIcon name="download" />
               </template>
             </AppButton>
           </div>
@@ -82,28 +79,26 @@
     </div>
 
     <div v-else class="no-images">
-      <el-empty description="暂无匹配图片" />
+      <AppEmpty description="暂无匹配图片" />
     </div>
 
-    <el-dialog v-model="previewVisible" width="80%" :close-on-click-modal="true" :destroy-on-close="true" center>
-      <template #title>
-        <div class="preview-title">
-          <span>{{ selectedImage?.name || '图片预览' }}</span>
-          <span v-if="selectedImage" class="preview-meta">{{ formatSize(selectedImage.size) }}</span>
-        </div>
-      </template>
+    <AppModal v-model="previewVisible" :title="selectedImage?.name || '图片预览'" width="min(1080px, 92vw)">
       <div v-if="selectedImage" class="preview-body">
         <img :src="selectedImage.path" :alt="selectedImage.name" />
       </div>
-    </el-dialog>
+    </AppModal>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
-import { Download, ArrowDown, Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { notify } from '../services/notify'
 import AppButton from './ui/AppButton.vue'
+import AppInput from './ui/AppInput.vue'
+import AppIcon from './ui/AppIcon.vue'
+import AppEmpty from './ui/AppEmpty.vue'
+import AppProgress from './ui/AppProgress.vue'
+import AppModal from './ui/AppModal.vue'
 
 const props = defineProps({
   images: {
@@ -122,6 +117,7 @@ const OCR_FALLBACK_LANG = 'eng'
 const searchQuery = ref('')
 const previewVisible = ref(false)
 const selectedImage = ref(null)
+const selectedZipIndex = ref(0)
 
 const ocrIndexing = ref(false)
 const ocrProgress = ref(0)
@@ -196,6 +192,21 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => props.zipUrls.length,
+  (length) => {
+    if (length === 0) {
+      selectedZipIndex.value = 0
+      return
+    }
+
+    if (selectedZipIndex.value > length - 1) {
+      selectedZipIndex.value = 0
+    }
+  },
+  { immediate: true }
+)
+
 const handleWorkerLog = (message = {}) => {
   if (!ocrIndexing.value || typeof message.progress !== 'number') return
 
@@ -257,7 +268,7 @@ const initWorker = async () => {
 const buildOcrIndex = async () => {
   if (ocrIndexing.value) return
   if (!props.images.length) {
-    ElMessage.warning('暂无图片可建立 OCR 索引')
+    notify.warning('暂无图片可建立 OCR 索引')
     return
   }
 
@@ -267,7 +278,7 @@ const buildOcrIndex = async () => {
     : props.images.filter((image) => !hasOcrIndex(image))
 
   if (!targets.length) {
-    ElMessage.success('OCR 索引已是最新')
+    notify.success('OCR 索引已是最新')
     return
   }
 
@@ -311,11 +322,11 @@ const buildOcrIndex = async () => {
     }
 
     ocrStatus.value = `OCR 索引完成：${successCount}/${total} 张已处理，可直接搜索图片文字`
-    ElMessage.success('OCR 建索引完成，可按图片中文字搜索')
+    notify.success('OCR 建索引完成，可按图片中文字搜索')
   } catch (error) {
     console.error('OCR 建索引失败:', error)
     ocrStatus.value = `OCR 索引失败：${error.message || '请稍后重试'}`
-    ElMessage.error(ocrStatus.value)
+    notify.error(ocrStatus.value)
   } finally {
     activeOcrMeta.value = { current: 0, total: 1 }
     ocrIndexing.value = false
@@ -341,11 +352,13 @@ const downloadImage = (image) => {
   document.body.removeChild(link)
 }
 
-const handleZipDownload = (zip) => {
+const downloadSelectedZip = () => {
+  const zip = props.zipUrls[selectedZipIndex.value]
   if (!zip || !zip.url) {
-    ElMessage.warning('压缩包信息无效')
+    notify.warning('压缩包信息无效')
     return
   }
+
   downloadZip(zip.url, zip.fileName)
 }
 
@@ -370,7 +383,7 @@ const downloadZip = (url, fileName = 'images.zip') => {
     })
     .catch((error) => {
       console.error('下载失败:', error)
-      ElMessage.error(`下载失败: ${error.message}`)
+      notify.error(`下载失败: ${error.message}`)
     })
 }
 
@@ -390,159 +403,160 @@ onBeforeUnmount(() => {
 }
 
 .gallery-header {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  display: flex;
   flex-wrap: wrap;
   gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.2rem;
 }
 
 .gallery-actions {
-  display: flex;
   align-items: center;
-  gap: 0.75rem;
+  display: flex;
   flex-wrap: wrap;
+  gap: 0.65rem;
 }
 
-.app-inline-arrow {
-  height: 1em;
-  width: 1em;
+.zip-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.55rem;
+}
+
+.zip-select {
+  background: #fff;
+  border: 1px solid #d8e2f5;
+  border-radius: 10px;
+  color: #536282;
+  font-size: 13px;
+  min-height: 32px;
+  padding: 0 10px;
 }
 
 .gallery-filter {
-  width: 320px;
   max-width: 100%;
+  width: 320px;
 }
 
 .ocr-status {
   margin-bottom: 1rem;
+}
 
-  p {
-    margin-top: 0.5rem;
-    color: #606266;
-    font-size: 0.875rem;
-  }
+.ocr-status p {
+  color: #606266;
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
 
-  .ocr-hint {
-    color: #909399;
-  }
+.ocr-status .ocr-hint {
+  color: #909399;
 }
 
 .gallery-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
 }
 
 .image-card {
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+  border: 1px solid #e3eaf7;
+  border-radius: 12px;
   overflow: hidden;
-  transition: all 0.3s;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
 
-  &:hover {
-    box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
-  }
+.image-card:hover {
+  box-shadow: 0 18px 30px -26px rgba(35, 52, 86, 0.6);
+  transform: translateY(-1px);
 }
 
 .image-container {
-  height: 150px;
-  display: flex;
-  justify-content: center;
   align-items: center;
-  overflow: hidden;
-  background-color: #f5f7fa;
+  background-color: #f4f7fc;
   cursor: zoom-in;
+  display: flex;
+  height: 150px;
+  justify-content: center;
+  overflow: hidden;
+}
 
-  img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-  }
+.image-container img {
+  max-height: 100%;
+  max-width: 100%;
+  object-fit: contain;
 }
 
 .image-info {
-  padding: 0.5rem;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  padding: 0.6rem;
+}
 
-  .info-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
+.info-top {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
 
-    .image-name {
-      font-size: 0.875rem;
-      color: #303133;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      flex: 1;
-    }
-  }
+.image-name {
+  color: #303133;
+  flex: 1;
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  .info-meta {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    flex-wrap: wrap;
+.info-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
 
-    .image-size {
-      font-size: 0.75rem;
-      color: #909399;
-    }
+.image-size {
+  color: #909399;
+  font-size: 0.75rem;
+}
 
-    .image-source {
-      font-size: 0.75rem;
-      color: #409eff;
-    }
-  }
+.image-source {
+  color: #4f8cff;
+  font-size: 0.75rem;
 }
 
 .ocr-preview {
   color: #606266;
+  display: -webkit-box;
   font-size: 0.75rem;
   line-height: 1.4;
-  display: -webkit-box;
   overflow: hidden;
-  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .no-images {
-  padding: 2rem;
   display: flex;
   justify-content: center;
-}
-
-.preview-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-}
-
-.preview-meta {
-  color: #909399;
-  font-size: 0.875rem;
+  padding: 2rem;
 }
 
 .preview-body {
-  width: 100%;
+  align-items: center;
   display: flex;
   justify-content: center;
-  align-items: center;
-  padding: 1rem 0;
+  min-height: 220px;
+  width: 100%;
+}
 
-  img {
-    max-width: 100%;
-    max-height: 80vh;
-    object-fit: contain;
-    border-radius: 4px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
-  }
+.preview-body img {
+  border-radius: 10px;
+  box-shadow: 0 18px 36px -28px rgba(11, 18, 36, 0.78);
+  max-height: 80vh;
+  max-width: 100%;
+  object-fit: contain;
 }
 </style>

@@ -1,27 +1,25 @@
 <template>
   <div class="file-upload">
-    <el-upload
-      ref="uploadRef"
+    <div
       class="upload-area"
-      drag
-      action="/api/documents/extract-images"
-      :data="uploadData"
-      :headers="uploadHeaders"
-      :on-success="handleSuccess"
-      :on-error="handleError"
-      :on-progress="handleProgress"
-      :before-upload="beforeUpload"
-      :show-file-list="true"
-      :limit="1"
-      accept=".docx,.doc,.pdf"
-      :auto-upload="true"
+      :class="{ 'is-active': dragActive, 'is-disabled': disabled || isUploading }"
+      @click="openPicker"
+      @dragover.prevent="handleDragOver"
+      @dragleave.prevent="handleDragLeave"
+      @drop.prevent="handleDrop"
     >
-      <el-icon class="el-icon--upload"><upload-filled /></el-icon>
-      <div class="el-upload__text">拖拽文档到此处或 <em>点击上传</em></div>
-      <template #tip>
-        <div class="el-upload__tip">支持 .docx、.doc 格式的 Word 文档和 .pdf 格式的 PDF 文件</div>
-      </template>
-    </el-upload>
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept=".docx,.doc,.pdf"
+        :disabled="disabled || isUploading"
+        @change="handleFileInput"
+      />
+      <AppIcon name="upload" class="upload-icon" />
+      <p class="upload-title">拖拽文档到此处或点击上传</p>
+      <p class="upload-tip">支持 .docx、.doc 和 .pdf 文件，单个文件不超过 50MB</p>
+      <p v-if="selectedFileName" class="upload-file">已选择：{{ selectedFileName }}</p>
+    </div>
 
     <div class="upload-options">
       <div class="upload-option-text">智能去重</div>
@@ -30,7 +28,7 @@
         type="button"
         role="switch"
         :aria-checked="dedupeEnabled ? 'true' : 'false'"
-        :disabled="isUploading"
+        :disabled="isUploading || disabled"
         @click="toggleDedupeEnabled"
       >
         <span class="switch-track">
@@ -40,7 +38,7 @@
     </div>
 
     <div v-if="isUploading" class="upload-progress">
-      <el-progress :percentage="formattedProgress" :stroke-width="8" />
+      <AppProgress :percentage="formattedProgress" />
       <p>{{ getProgressText() }}</p>
     </div>
   </div>
@@ -48,8 +46,20 @@
 
 <script setup>
 import { ref, computed, onUnmounted } from 'vue'
-import { UploadFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { notify } from '../services/notify'
+import AppIcon from './ui/AppIcon.vue'
+import AppProgress from './ui/AppProgress.vue'
+
+const props = defineProps({
+  projectId: {
+    type: String,
+    default: ''
+  },
+  disabled: {
+    type: Boolean,
+    default: false
+  }
+})
 
 const emit = defineEmits(['images-extracted'])
 
@@ -58,15 +68,24 @@ const uploadProgress = ref(0)
 const uploadTransportProgress = ref(0)
 const backendProgress = ref(0)
 const backendMessage = ref('')
-const uploadRef = ref(null)
 const currentFileName = ref('')
 const fileType = ref('')
 const currentJobId = ref('')
+const selectedFileName = ref('')
 const dedupeEnabled = ref(true)
-let progressPollTimer = null
+const dragActive = ref(false)
 const sessionReady = ref(false)
+const fileInputRef = ref(null)
+let progressPollTimer = null
 
 const generateJobId = () => `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+
+const uploadAction = computed(() => {
+  if (props.projectId) {
+    return `/api/projects/${encodeURIComponent(props.projectId)}/documents/extract-images`
+  }
+  return '/api/documents/extract-images'
+})
 
 const stopProgressPolling = () => {
   if (progressPollTimer) {
@@ -103,13 +122,13 @@ const fetchJobProgress = async () => {
     backendMessage.value = data.job.message || backendMessage.value
 
     if (data.job.status === 'failed' && data.job.message) {
-      ElMessage.error(data.job.message)
+      notify.error(data.job.message)
       stopProgressPolling()
     }
 
     updateDisplayProgress()
   } catch (error) {
-    // 进度接口短暂失败不影响主流程
+    // ignore poll failures
   }
 }
 
@@ -125,17 +144,8 @@ const getProgressText = () => {
   return fileType.value === 'pdf' ? '正在处理 PDF...' : '正在处理 Word 文档...'
 }
 
-const uploadHeaders = computed(() => ({
-  'X-Requested-With': 'XMLHttpRequest',
-  'X-Job-Id': currentJobId.value || ''
-}))
-
-const uploadData = computed(() => ({
-  dedupe: dedupeEnabled.value ? '1' : '0'
-}))
-
 const toggleDedupeEnabled = () => {
-  if (isUploading.value) return
+  if (isUploading.value || props.disabled) return
   dedupeEnabled.value = !dedupeEnabled.value
 }
 
@@ -151,7 +161,9 @@ const ensureSessionReady = async () => {
   return true
 }
 
-const beforeUpload = async (file) => {
+const validateFile = (file) => {
+  if (!file) return { valid: false }
+
   const dotIndex = file.name.lastIndexOf('.')
   const ext = dotIndex >= 0 ? file.name.slice(dotIndex).toLowerCase() : ''
 
@@ -162,49 +174,29 @@ const beforeUpload = async (file) => {
   const isPdfDoc = file.type === 'application/pdf' || ext === '.pdf'
 
   if (!isWordDoc && !isPdfDoc) {
-    ElMessage.error('只能上传 Word 文档或 PDF 文件!')
-    return false
+    notify.error('只能上传 Word 文档或 PDF 文件')
+    return { valid: false }
   }
-
-  fileType.value = isPdfDoc ? 'pdf' : 'word'
 
   const isLt50M = file.size / 1024 / 1024 < 50
   if (!isLt50M) {
-    ElMessage.error('文件大小不能超过50MB!')
-    return false
+    notify.error('文件大小不能超过 50MB')
+    return { valid: false }
   }
 
-  currentFileName.value = file.name.replace(/\.[^/.]+$/, '')
-
-  try {
-    await ensureSessionReady()
-  } catch (error) {
-    ElMessage.error(error.message || '会话初始化失败，请重试')
-    return false
+  return {
+    valid: true,
+    type: isPdfDoc ? 'pdf' : 'word'
   }
-
-  currentJobId.value = generateJobId()
-  isUploading.value = true
-  uploadProgress.value = 5
-  uploadTransportProgress.value = 0
-  backendProgress.value = 0
-  backendMessage.value = '正在上传文件...'
-
-  startProgressPolling()
-  return true
 }
 
-const handleProgress = (event) => {
-  if (!event.percent) return
-
-  uploadTransportProgress.value = Math.max(uploadTransportProgress.value, Math.floor(event.percent))
-  backendMessage.value = uploadTransportProgress.value >= 100
-    ? '上传完成，等待后端处理...'
-    : '正在上传文件...'
-  updateDisplayProgress()
+const resetInputValue = () => {
+  if (fileInputRef.value) {
+    fileInputRef.value.value = ''
+  }
 }
 
-const handleSuccess = (response) => {
+const handleUploadResponse = (response) => {
   stopProgressPolling()
 
   isUploading.value = false
@@ -217,7 +209,7 @@ const handleSuccess = (response) => {
     const successMessage = dedupedCount > 0
       ? `成功提取 ${response.images.length} 张图片，已去重 ${dedupedCount} 张`
       : `成功提取 ${response.images.length} 张图片`
-    ElMessage.success(successMessage)
+    notify.success(successMessage)
 
     emit('images-extracted', {
       images: response.images,
@@ -226,18 +218,16 @@ const handleSuccess = (response) => {
       jobId: response.jobId || currentJobId.value,
       dedupe: response.dedupe || null
     })
-
-    if (uploadRef.value) {
-      uploadRef.value.clearFiles()
-    }
   } else {
-    ElMessage.error(response.message || '图片提取失败')
+    notify.error(response.message || '图片提取失败')
   }
 
   currentJobId.value = ''
+  selectedFileName.value = ''
+  resetInputValue()
 }
 
-const handleError = (error) => {
+const handleUploadError = (error) => {
   stopProgressPolling()
 
   isUploading.value = false
@@ -247,7 +237,116 @@ const handleError = (error) => {
   currentJobId.value = ''
 
   console.error('上传错误:', error)
-  ElMessage.error('上传失败，请重试')
+  notify.error(error?.message || '上传失败，请重试')
+}
+
+const submitFile = async (file) => {
+  const validation = validateFile(file)
+  if (!validation.valid) {
+    resetInputValue()
+    selectedFileName.value = ''
+    return
+  }
+
+  fileType.value = validation.type
+  currentFileName.value = file.name.replace(/\.[^/.]+$/, '')
+  selectedFileName.value = file.name
+
+  try {
+    await ensureSessionReady()
+  } catch (error) {
+    notify.error(error.message || '会话初始化失败，请重试')
+    return
+  }
+
+  currentJobId.value = generateJobId()
+  isUploading.value = true
+  uploadProgress.value = 5
+  uploadTransportProgress.value = 0
+  backendProgress.value = 0
+  backendMessage.value = '正在上传文件...'
+
+  startProgressPolling()
+
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('dedupe', dedupeEnabled.value ? '1' : '0')
+
+  const xhr = new XMLHttpRequest()
+  xhr.open('POST', uploadAction.value, true)
+  xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest')
+  xhr.setRequestHeader('X-Job-Id', currentJobId.value)
+
+  xhr.upload.onprogress = (event) => {
+    if (!event.lengthComputable) return
+
+    uploadTransportProgress.value = Math.max(
+      uploadTransportProgress.value,
+      Math.floor((event.loaded / event.total) * 100)
+    )
+
+    backendMessage.value = uploadTransportProgress.value >= 100
+      ? '上传完成，等待后端处理...'
+      : '正在上传文件...'
+
+    updateDisplayProgress()
+  }
+
+  xhr.onerror = () => {
+    handleUploadError(new Error('网络异常'))
+  }
+
+  xhr.onload = () => {
+    let response = {}
+    try {
+      response = JSON.parse(xhr.responseText || '{}')
+    } catch (error) {
+      handleUploadError(new Error('服务响应异常'))
+      return
+    }
+
+    if (xhr.status >= 200 && xhr.status < 300) {
+      handleUploadResponse(response)
+      return
+    }
+
+    handleUploadError(new Error(response.message || `请求失败 (${xhr.status})`))
+  }
+
+  xhr.send(formData)
+}
+
+const openPicker = () => {
+  if (props.disabled || isUploading.value) return
+  if (fileInputRef.value) {
+    fileInputRef.value.click()
+  }
+}
+
+const handleFileInput = (event) => {
+  const file = event.target?.files?.[0]
+  if (file) {
+    submitFile(file)
+  }
+}
+
+const handleDragOver = () => {
+  if (props.disabled || isUploading.value) return
+  dragActive.value = true
+}
+
+const handleDragLeave = () => {
+  dragActive.value = false
+}
+
+const handleDrop = (event) => {
+  dragActive.value = false
+  if (props.disabled || isUploading.value) return
+
+  const file = event.dataTransfer?.files?.[0]
+  if (file) {
+    submitFile(file)
+  }
 }
 
 onUnmounted(() => {
@@ -263,39 +362,73 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
 }
 
 .upload-area {
-  width: 100%;
-
-  :deep(.el-upload) {
-    width: 100%;
-  }
-
-  :deep(.el-upload-dragger) {
-    width: 100%;
-    height: 220px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-  }
+  align-items: center;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8ff 100%);
+  border: 1.5px dashed #c9d6ef;
+  border-radius: 14px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  justify-content: center;
+  min-height: 220px;
+  padding: 1.2rem;
+  text-align: center;
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.el-icon--upload {
-  font-size: 48px;
-  color: var(--primary-color);
-  margin-bottom: 16px;
+.upload-area:hover,
+.upload-area.is-active {
+  border-color: #7fa3ef;
+  box-shadow: 0 20px 34px -30px rgba(34, 58, 102, 0.62);
+  transform: translateY(-1px);
+}
+
+.upload-area.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+  transform: none;
+}
+
+.upload-area input {
+  display: none;
+}
+
+.upload-icon {
+  color: #4f8cff;
+  font-size: 44px;
+}
+
+.upload-title {
+  color: #2d3b56;
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.upload-tip {
+  color: #8a96ac;
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.upload-file {
+  color: #5f6f8c;
+  font-size: 0.8rem;
+  margin: 0.2rem 0 0;
 }
 
 .upload-options {
-  margin-top: 0.75rem;
-  padding: 0.4rem 0.6rem;
+  align-items: center;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   border: 1px solid #e6ebf5;
   border-radius: 999px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
   gap: 0.5rem;
+  justify-content: flex-start;
+  margin-top: 0.75rem;
   max-width: 100%;
+  padding: 0.4rem 0.6rem;
 }
 
 .upload-option-text {
@@ -318,25 +451,25 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
 }
 
 .dedupe-toggle-switch .switch-track {
-  width: 32px;
-  height: 18px;
-  border-radius: 999px;
   background: #c8d2e2;
   border: 1px solid #bcc7d9;
+  border-radius: 999px;
+  height: 18px;
   position: relative;
   transition: all 0.2s ease;
+  width: 32px;
 }
 
 .dedupe-toggle-switch .switch-thumb {
-  width: 13px;
-  height: 13px;
-  border-radius: 999px;
   background: #fff;
+  border-radius: 999px;
+  box-shadow: 0 2px 6px rgba(48, 62, 92, 0.22);
+  height: 13px;
+  left: 1.5px;
   position: absolute;
   top: 1.5px;
-  left: 1.5px;
-  box-shadow: 0 2px 6px rgba(48, 62, 92, 0.22);
   transition: all 0.2s ease;
+  width: 13px;
 }
 
 .dedupe-toggle-switch[aria-checked='true'] .switch-track {
@@ -348,21 +481,21 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
   left: calc(100% - 14.5px);
 }
 
+.upload-progress {
+  margin-top: 1rem;
+}
+
+.upload-progress p {
+  color: var(--text-secondary);
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
 @media (max-width: 640px) {
   .upload-options {
     border-radius: 12px;
     display: flex;
     flex-wrap: wrap;
-  }
-}
-
-.upload-progress {
-  margin-top: 1.5rem;
-
-  p {
-    margin-top: 0.5rem;
-    text-align: center;
-    color: var(--text-secondary);
   }
 }
 </style>

@@ -74,7 +74,7 @@ start_backend() {
 start_frontend() {
   cd "${FRONTEND_DIR}"
   echo "Starting frontend on port ${FRONTEND_PORT}..."
-  npm run dev -- --port "${FRONTEND_PORT}" &
+  BACKEND_PORT="${BACKEND_PORT}" npm run dev -- --port "${FRONTEND_PORT}" &
   frontend_pid=$!
 }
 
