@@ -4,6 +4,7 @@
       <slot name="prefix" />
     </span>
     <input
+      ref="inputRef"
       :type="type"
       :value="modelValue"
       :placeholder="placeholder"
@@ -24,6 +25,8 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
+
 defineProps({
   modelValue: {
     type: [String, Number],
@@ -52,6 +55,12 @@ defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'enter'])
+
+const inputRef = ref(null)
+
+defineExpose({
+  focus: () => inputRef.value?.focus()
+})
 </script>
 
 <style lang="scss" scoped>

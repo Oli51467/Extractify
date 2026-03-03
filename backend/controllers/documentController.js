@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const documentService = require('../services/documentService');
 const projectService = require('../services/projectService');
+const shareService = require('../services/shareService');
 const config = require('../config');
 const jobService = require('../services/jobService');
 const { normalizeUploadedFilename } = require('../utils/filename');
@@ -62,6 +63,11 @@ const buildSuccessMessage = (result) => {
   return `图片提取成功，共 ${result.images.length} 张`;
 };
 
+const enrichSharePayload = (share) => {
+  if (!share) return null;
+  return shareService.buildPublicSharePayload(share);
+};
+
 const persistRunState = (runContext, patch = {}) => {
   if (!runContext || !runContext.projectId || !runContext.runId) return;
   try {
@@ -77,6 +83,9 @@ const processExtractionTask = async (options = {}) => {
   const jobId = jobService.sanitizeJobId(options.jobId || '');
   const file = options.file;
   const dedupeEnabled = parseBooleanFlag(options.dedupeEnabled, config.processing.imageDedupeEnabled);
+  const ocrEnabled = parseBooleanFlag(options.ocrEnabled, config.processing.autoOcrEnabled);
+  const autoNamingEnabled = parseBooleanFlag(options.autoNamingEnabled, config.processing.autoNamingEnabled);
+  const shareEnabled = parseBooleanFlag(options.shareEnabled, config.share.enabled);
   const projectId = String(options.projectId || '').trim();
   const batchId = String(options.batchId || '').trim();
   const sourceNameOverride = String(options.sourceName || '').trim();
@@ -105,7 +114,10 @@ const processExtractionTask = async (options = {}) => {
     message: '文件上传完成，等待处理...',
     sourceFileName: originalName,
     fileType: fileExt,
-    dedupeEnabled
+    dedupeEnabled,
+    ocrEnabled,
+    autoNamingEnabled,
+    shareEnabled
   }, sessionId);
 
   const outputDir = ensureOutputDir(jobId, projectId);
@@ -137,7 +149,10 @@ const processExtractionTask = async (options = {}) => {
       progress: 10,
       message: '文件上传完成，等待处理...',
       params: {
-        dedupeEnabled
+        dedupeEnabled,
+        ocrEnabled,
+        autoNamingEnabled,
+        shareEnabled
       }
     });
 
@@ -166,9 +181,29 @@ const processExtractionTask = async (options = {}) => {
 
       return documentService.extractImages(inputFilePath, outputDir, {
         enableDedupe: dedupeEnabled,
+        enableOcr: ocrEnabled,
+        enableAutoNaming: autoNamingEnabled,
+        sourceName,
         onProgress: reportAll
       });
     }, 15);
+
+    let shareInfo = null;
+    if (shareEnabled && result.zipAbsolutePath) {
+      try {
+        shareInfo = shareService.createShareLink({
+          sessionId,
+          projectId,
+          runId: runContext?.runId || '',
+          jobId,
+          sourceName,
+          zipAbsolutePath: result.zipAbsolutePath,
+          imageCount: Array.isArray(result.images) ? result.images.length : 0
+        });
+      } catch (error) {
+        console.error('创建分享链接失败:', error);
+      }
+    }
 
     const successMessage = buildSuccessMessage(result);
     jobService.updateJob(jobId, {
@@ -178,7 +213,10 @@ const processExtractionTask = async (options = {}) => {
       result: {
         imageCount: result.images.length,
         zipUrl: result.zipPath || '',
-        dedupe: result.dedupe || null
+        dedupe: result.dedupe || null,
+        naming: result.naming || null,
+        ocr: result.ocr || null,
+        share: shareInfo || null
       }
     }, sessionId);
 
@@ -190,7 +228,10 @@ const processExtractionTask = async (options = {}) => {
         result: {
           imageCount: result.images.length,
           zipUrl: result.zipPath || '',
-          dedupe: result.dedupe || null
+          dedupe: result.dedupe || null,
+          naming: result.naming || null,
+          ocr: result.ocr || null,
+          share: shareInfo || null
         },
         finishedAt: new Date().toISOString()
       });
@@ -217,6 +258,7 @@ const processExtractionTask = async (options = {}) => {
       fileExt,
       sourceName,
       result,
+      share: shareInfo,
       projectId: runContext ? runContext.projectId : '',
       runId: runContext ? runContext.runId : '',
       documentId: runContext ? runContext.documentId : ''
@@ -246,6 +288,9 @@ const extractImages = async (req, res) => {
   const jobId = req.jobId || jobService.sanitizeJobId(req.headers['x-job-id']);
   const sessionId = req.sessionId;
   const dedupeEnabled = parseBooleanFlag(req.body?.dedupe, config.processing.imageDedupeEnabled);
+  const ocrEnabled = parseBooleanFlag(req.body?.ocr, config.processing.autoOcrEnabled);
+  const autoNamingEnabled = parseBooleanFlag(req.body?.autoNaming, config.processing.autoNamingEnabled);
+  const shareEnabled = parseBooleanFlag(req.body?.share, config.share.enabled);
   const projectId = String(req.body?.projectId || req.params?.projectId || '').trim();
   req.setTimeout(config.server.requestTimeoutMs);
 
@@ -255,6 +300,9 @@ const extractImages = async (req, res) => {
       jobId,
       file: req.file,
       dedupeEnabled,
+      ocrEnabled,
+      autoNamingEnabled,
+      shareEnabled,
       projectId
     });
 
@@ -265,6 +313,9 @@ const extractImages = async (req, res) => {
       images,
       zipUrl: task.result.zipPath || '',
       dedupe: task.result.dedupe || null,
+      naming: task.result.naming || null,
+      ocr: task.result.ocr || null,
+      share: enrichSharePayload(task.share),
       projectId: task.projectId || '',
       runId: task.runId || '',
       documentId: task.documentId || '',

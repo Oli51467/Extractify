@@ -22,6 +22,11 @@ router.get('/projects/:projectId', ensureProjectAccess, projectController.getPro
 router.patch('/projects/:projectId', ensureProjectAccess, projectController.updateProject);
 router.delete('/projects/:projectId', ensureProjectAccess, projectController.deleteProject);
 router.get('/projects/:projectId/documents', ensureProjectAccess, projectController.listProjectDocuments);
+router.get(
+  '/projects/:projectId/documents/:documentId/preview',
+  ensureProjectAccess,
+  projectController.previewProjectDocument
+);
 router.get('/projects/:projectId/runs', ensureProjectAccess, projectController.listProjectRuns);
 router.get('/projects/:projectId/assets', ensureProjectAccess, projectController.listProjectAssets);
 router.get('/projects/:projectId/audit', ensureProjectAccess, projectController.listProjectAudit);

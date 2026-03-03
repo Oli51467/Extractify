@@ -64,12 +64,19 @@ const config = {
     cleanupIntervalMs: toNumber(process.env.JOB_CLEANUP_INTERVAL_HOURS, 6, 1) * 60 * 60 * 1000
   },
   tools: {
-    sofficePath: process.env.SOFFICE_PATH || ''
+    sofficePath: process.env.SOFFICE_PATH || '',
+    tesseractPath: process.env.TESSERACT_PATH || ''
   },
   processing: {
     imageDedupeEnabled: process.env.IMAGE_DEDUPE_ENABLED !== 'false',
     imageDedupeHammingThreshold: toNumber(process.env.IMAGE_DEDUPE_HAMMING_THRESHOLD, 6, 0),
-    imageDedupeAspectTolerance: toNumber(process.env.IMAGE_DEDUPE_ASPECT_TOLERANCE, 0.03, 0)
+    imageDedupeAspectTolerance: toNumber(process.env.IMAGE_DEDUPE_ASPECT_TOLERANCE, 0.03, 0),
+    autoOcrEnabled: process.env.AUTO_OCR_ENABLED !== 'false',
+    autoNamingEnabled: process.env.AUTO_NAMING_ENABLED !== 'false'
+  },
+  share: {
+    enabled: process.env.SHARE_LINK_ENABLED !== 'false',
+    defaultTtlMs: toNumber(process.env.SHARE_LINK_TTL_HOURS, 168, 1) * 60 * 60 * 1000
   },
   database: {
     file: resolvePathFromRoot(process.env.DB_FILE, path.join(ROOT_DIR, 'data', 'extractify.sqlite'))

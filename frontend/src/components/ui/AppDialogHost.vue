@@ -1,11 +1,12 @@
 <template>
   <teleport to="body">
-    <div v-if="store.visible" class="dialog-mask" @click.self="dialogActions.cancel()">
-      <div class="dialog-panel">
+    <div v-if="store.visible" class="dialog-mask" @mousedown.self="dialogActions.cancel()">
+      <div class="dialog-panel" @mousedown.stop @click.stop>
         <h3>{{ store.title }}</h3>
         <p v-if="store.message" class="dialog-message">{{ store.message }}</p>
 
         <AppInput
+          ref="promptInputRef"
           v-if="store.mode === 'prompt'"
           :model-value="store.inputValue"
           @update:model-value="dialogActions.setInputValue"
@@ -26,11 +27,22 @@
 </template>
 
 <script setup>
+import { nextTick, ref, watch } from 'vue'
 import { dialogActions, useDialogStore } from '../../services/dialog'
 import AppButton from './AppButton.vue'
 import AppInput from './AppInput.vue'
 
 const store = useDialogStore()
+const promptInputRef = ref(null)
+
+watch(
+  () => [store.visible, store.mode],
+  async ([visible, mode]) => {
+    if (!visible || mode !== 'prompt') return
+    await nextTick()
+    promptInputRef.value?.focus?.()
+  }
+)
 </script>
 
 <style lang="scss" scoped>

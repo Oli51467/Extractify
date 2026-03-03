@@ -180,7 +180,17 @@ watch(
       }
     }
 
-    if (Object.keys(nextIndex).length !== Object.keys(ocrIndex.value).length) {
+    // 优先复用后端自动 OCR 文本，前端可继续补全/重识别
+    props.images.forEach((image) => {
+      const key = getImageKey(image)
+      const backendText = String(image?.ocrText || '').trim()
+      if (!backendText) return
+      if (!Object.prototype.hasOwnProperty.call(nextIndex, key) || !String(nextIndex[key] || '').trim()) {
+        nextIndex[key] = backendText
+      }
+    })
+
+    if (JSON.stringify(nextIndex) !== JSON.stringify(ocrIndex.value)) {
       ocrIndex.value = nextIndex
     }
 

@@ -90,6 +90,9 @@ const processBatchItem = async (sessionId, projectId, batchId, item, defaults = 
     imageCount: task.result?.images?.length || 0,
     zipUrl: task.result?.zipPath || '',
     dedupe: task.result?.dedupe || null,
+    naming: task.result?.naming || null,
+    ocr: task.result?.ocr || null,
+    share: task.share || null,
     runId: task.runId || '',
     documentId: task.documentId || ''
   };

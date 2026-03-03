@@ -20,8 +20,7 @@ import {
 export const workspaceTabs = [
   { key: 'documents', label: '文档' },
   { key: 'assets', label: '素材' },
-  { key: 'history', label: '历史' },
-  { key: 'batches', label: '批量' }
+  { key: 'history', label: '历史' }
 ]
 
 const normalizeWorkspaceType = (value) => String(value || '').trim().toLowerCase() === 'merge' ? 'merge' : 'extract'
@@ -58,7 +57,8 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
     width: asset.width,
     height: asset.height,
     page: asset.page,
-    source: asset.sourceContext?.sourceName || ''
+    source: asset.sourceContext?.sourceName || '',
+    ocrText: asset.ocrText || ''
   })))
 
   const zipUrls = computed(() => {
@@ -86,7 +86,7 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
 
   const createDefaultProjectIfNeeded = async () => {
     if (projects.value.length > 0) return
-    const defaultName = isExtractWorkspace.value ? 'DocPix Extract' : 'DocPix Merge'
+    const defaultName = isExtractWorkspace.value ? 'Extractify' : 'Mergify'
     const project = await createProject({ name: defaultName }, currentWorkspaceType.value)
     projects.value = [project]
     selectedProjectId.value = project.id
@@ -123,7 +123,7 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
   }
 
   const createProjectFromInput = async () => {
-    const fallbackName = `${isExtractWorkspace.value ? 'DocPix Extract' : 'DocPix Merge'} ${projects.value.length + 1}`
+    const fallbackName = `${isExtractWorkspace.value ? 'Extractify' : 'Mergify'} ${projects.value.length + 1}`
     const result = await openPromptDialog({
       title: 'Create Project',
       message: 'Enter a project name',

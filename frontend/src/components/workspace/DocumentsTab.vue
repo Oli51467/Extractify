@@ -1,53 +1,7 @@
 <template>
   <div class="tab-panel">
     <AppCard class="upload-card">
-      <template #header>
-        <div class="panel-card-header">文档解析</div>
-      </template>
-      <FileUpload :project-id="projectId" @images-extracted="emit('single-extracted')" />
-    </AppCard>
-
-    <AppCard class="batch-card">
-      <template #header>
-        <div class="panel-card-header">批量处理中心</div>
-      </template>
-      <div class="batch-create">
-        <label class="batch-file-label">
-          <input
-            :key="batchFileInputKey"
-            type="file"
-            multiple
-            accept=".docx,.doc,.pdf"
-            @change="handleBatchFileChange"
-          />
-          选择文档（可多选）
-        </label>
-        <div class="batch-config">
-          <span>智能去重</span>
-          <button
-            class="small-switch"
-            type="button"
-            role="switch"
-            :aria-checked="batchDedupeEnabled ? 'true' : 'false'"
-            @click="emit('update:batchDedupeEnabled', !batchDedupeEnabled)"
-          >
-            <span class="small-switch-track">
-              <span class="small-switch-thumb" />
-            </span>
-          </button>
-        </div>
-        <AppButton
-          size="sm"
-          :disabled="selectedBatchFileCount === 0 || batchSubmitting"
-          :loading="batchSubmitting"
-          @click="emit('create-batch')"
-        >
-          提交批量任务
-        </AppButton>
-      </div>
-      <p v-if="selectedBatchFileCount > 0" class="batch-file-tip">
-        已选择 {{ selectedBatchFileCount }} 个文件
-      </p>
+      <FileUpload :project-id="projectId" @images-extracted="emit('upload-finished')" />
     </AppCard>
 
     <AppCard class="list-card">
@@ -55,14 +9,25 @@
         <div class="panel-card-header">项目文档（{{ projectDocuments.length }}）</div>
       </template>
       <div v-if="projectDocuments.length > 0" class="simple-list">
-        <div v-for="doc in projectDocuments" :key="doc.id" class="simple-item">
-          <div class="simple-item-title">{{ doc.sourceName }}</div>
+        <button
+          v-for="doc in projectDocuments"
+          :key="doc.id"
+          type="button"
+          class="simple-item"
+          :title="`点击在线查看：${doc.sourceName || '未命名文档'}`"
+          @click="openDocPreview(doc)"
+        >
+          <div class="simple-item-title">
+            <span>{{ doc.sourceName }}</span>
+            <span class="simple-item-type-tag" :class="resolveFileTypeClass(doc.fileType)">
+              {{ resolveFileTypeLabel(doc.fileType) }}
+            </span>
+          </div>
           <div class="simple-item-meta">
-            <span>{{ doc.fileType || '-' }}</span>
             <span>{{ formatSize(doc.fileSize) }}</span>
             <span>{{ formatDate(doc.createdAt) }}</span>
           </div>
-        </div>
+        </button>
       </div>
       <AppEmpty v-else description="该项目暂无文档" />
     </AppCard>
@@ -71,12 +36,12 @@
 
 <script setup>
 import FileUpload from '../FileUpload.vue'
-import AppButton from '../ui/AppButton.vue'
 import AppCard from '../ui/AppCard.vue'
 import AppEmpty from '../ui/AppEmpty.vue'
 import { formatDate, formatSize } from '../../utils/formatters'
+import { notify } from '../../services/notify'
 
-defineProps({
+const props = defineProps({
   projectId: {
     type: String,
     required: true
@@ -84,30 +49,36 @@ defineProps({
   projectDocuments: {
     type: Array,
     default: () => []
-  },
-  selectedBatchFileCount: {
-    type: Number,
-    default: 0
-  },
-  batchDedupeEnabled: {
-    type: Boolean,
-    default: true
-  },
-  batchSubmitting: {
-    type: Boolean,
-    default: false
-  },
-  batchFileInputKey: {
-    type: Number,
-    default: 0
   }
 })
 
-const emit = defineEmits(['single-extracted', 'batch-files-change', 'create-batch', 'update:batchDedupeEnabled'])
+const emit = defineEmits(['upload-finished'])
 
-const handleBatchFileChange = (event) => {
-  const files = Array.from(event.target?.files || [])
-  emit('batch-files-change', files)
+const normalizeFileExt = (value) => String(value || '').trim().toLowerCase()
+
+const resolveFileTypeLabel = (fileType) => {
+  const ext = normalizeFileExt(fileType)
+  if (ext === '.pdf' || ext === 'pdf') return 'PDF'
+  if (ext === '.doc' || ext === '.docx' || ext === 'doc' || ext === 'docx') return 'Word'
+  return 'File'
+}
+
+const resolveFileTypeClass = (fileType) => {
+  const ext = normalizeFileExt(fileType)
+  if (ext === '.pdf' || ext === 'pdf') return 'is-pdf'
+  if (ext === '.doc' || ext === '.docx' || ext === 'doc' || ext === 'docx') return 'is-word'
+  return 'is-file'
+}
+
+const openDocPreview = (doc) => {
+  if (!doc?.id) return
+  const baseUrl = doc.previewUrl || `/api/projects/${encodeURIComponent(props.projectId)}/documents/${encodeURIComponent(doc.id)}/preview`
+  const cacheKey = encodeURIComponent(String(doc.updatedAt || doc.createdAt || Date.now()))
+  const previewUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${cacheKey}`
+  const opened = window.open(previewUrl, '_blank', 'noopener')
+  if (!opened) {
+    notify.warning('新窗口被浏览器拦截，请允许弹窗后重试')
+  }
 }
 </script>
 
@@ -123,79 +94,6 @@ const handleBatchFileChange = (event) => {
   color: #24324a;
 }
 
-.batch-create {
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-  flex-wrap: wrap;
-}
-
-.batch-file-label {
-  border: 1px dashed #cad7f1;
-  background: #f7faff;
-  color: #4f5d7a;
-  border-radius: 8px;
-  padding: 0.36rem 0.7rem;
-  font-size: 0.82rem;
-  cursor: pointer;
-
-  input {
-    display: none;
-  }
-}
-
-.batch-config {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  color: #6f7b93;
-  font-size: 0.8rem;
-}
-
-.small-switch {
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-}
-
-.small-switch-track {
-  display: inline-block;
-  width: 30px;
-  height: 17px;
-  border-radius: 999px;
-  background: #c8d2e2;
-  border: 1px solid #bcc7d9;
-  position: relative;
-}
-
-.small-switch-thumb {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  border-radius: 999px;
-  background: #fff;
-  top: 1.5px;
-  left: 1.5px;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 5px rgba(48, 62, 92, 0.2);
-}
-
-.small-switch[aria-checked='true'] .small-switch-track {
-  background: #48b38d;
-  border-color: #3ea780;
-}
-
-.small-switch[aria-checked='true'] .small-switch-thumb {
-  left: calc(100% - 13.5px);
-}
-
-.batch-file-tip {
-  margin: 0.6rem 0 0;
-  color: #7f8ba1;
-  font-size: 0.79rem;
-}
-
 .simple-list {
   display: flex;
   flex-direction: column;
@@ -203,10 +101,27 @@ const handleBatchFileChange = (event) => {
 }
 
 .simple-item {
+  appearance: none;
   border: 1px solid #e8edf6;
   border-radius: 10px;
-  padding: 0.58rem 0.72rem;
   background: #fff;
+  cursor: pointer;
+  display: block;
+  text-align: left;
+  width: 100%;
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  padding: 0.58rem 0.72rem;
+}
+
+.simple-item:hover {
+  border-color: #d5e3fb;
+  box-shadow: 0 16px 24px -24px rgba(42, 66, 116, 0.72);
+  transform: translateY(-1px);
+}
+
+.simple-item:focus-visible {
+  outline: 2px solid rgba(79, 140, 255, 0.44);
+  outline-offset: 2px;
 }
 
 .simple-item-title {
@@ -216,6 +131,33 @@ const handleBatchFileChange = (event) => {
   display: flex;
   align-items: center;
   gap: 0.45rem;
+}
+
+.simple-item-type-tag {
+  border: 1px solid #e8edf6;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.16rem 0.4rem;
+}
+
+.simple-item-type-tag.is-pdf {
+  background: #fff1f1;
+  border-color: #f8d8d8;
+  color: #d14a4a;
+}
+
+.simple-item-type-tag.is-word {
+  background: #edf4ff;
+  border-color: #d8e6ff;
+  color: #3f79f3;
+}
+
+.simple-item-type-tag.is-file {
+  background: #f2f5fa;
+  border-color: #e1e8f4;
+  color: #60708f;
 }
 
 .simple-item-meta {

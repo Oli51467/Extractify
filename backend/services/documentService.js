@@ -6,6 +6,7 @@ const AdmZip = require('adm-zip');
 const uuid = require('uuid').v4;
 const { createCanvas, loadImage } = require('canvas');
 const config = require('../config');
+const { normalizeUploadedFilename } = require('../utils/filename');
 
 // 为 pdf.js 添加 Node.js 兼容性
 global.DOMMatrix = class DOMMatrix {
@@ -66,6 +67,15 @@ const SOFFICE_CANDIDATES = [
   'soffice'
 ].filter(Boolean);
 
+const TESSERACT_CANDIDATES = [
+  config.tools.tesseractPath,
+  process.env.TESSERACT_PATH,
+  '/opt/homebrew/bin/tesseract',
+  '/usr/local/bin/tesseract',
+  '/usr/bin/tesseract',
+  'tesseract'
+].filter(Boolean);
+
 const clampProgress = (value) => {
   const num = Number(value);
   if (Number.isNaN(num)) return 0;
@@ -108,6 +118,13 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
   const dedupeEnabled = typeof options.enableDedupe === 'boolean'
     ? options.enableDedupe
     : config.processing.imageDedupeEnabled;
+  const autoOcrEnabled = typeof options.enableOcr === 'boolean'
+    ? options.enableOcr
+    : config.processing.autoOcrEnabled;
+  const autoNamingEnabled = typeof options.enableAutoNaming === 'boolean'
+    ? options.enableAutoNaming
+    : config.processing.autoNamingEnabled;
+  const sourceName = normalizeUploadedFilename(options.sourceName, path.basename(inputFilePath, path.extname(inputFilePath)));
   const tempDir = path.join(config.paths.tempRoot, uuid());
 
   try {
@@ -146,6 +163,19 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       dedupedCount: 0
     };
 
+    let namingSummary = {
+      enabled: autoNamingEnabled,
+      renamedCount: 0
+    };
+
+    let ocrSummary = {
+      enabled: autoOcrEnabled,
+      engineAvailable: false,
+      processedCount: 0,
+      indexedCount: 0,
+      failedCount: 0
+    };
+
     if (images.length === 0) {
       reportProgress(onProgress, {
         status: 'processing',
@@ -155,7 +185,10 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       return {
         images: [],
         zipPath: '',
-        dedupe: dedupeSummary
+        zipAbsolutePath: '',
+        dedupe: dedupeSummary,
+        naming: namingSummary,
+        ocr: ocrSummary
       };
     }
 
@@ -179,9 +212,36 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       });
     }
 
+    if (autoNamingEnabled) {
+      const namingReporter = createStageReporter(onProgress, 90, 3);
+      const namingResult = await applyAutoNaming(images, outputDir, sourceName, namingReporter);
+      images = namingResult.images;
+      namingSummary = {
+        enabled: true,
+        renamedCount: namingResult.renamedCount
+      };
+    } else {
+      reportProgress(onProgress, {
+        status: 'processing',
+        progress: 92,
+        message: '已跳过智能命名'
+      });
+    }
+
+    if (autoOcrEnabled) {
+      const ocrReporter = createStageReporter(onProgress, 93, 3);
+      ocrSummary = await buildImageOcrIndex(images, outputDir, ocrReporter);
+    } else {
+      reportProgress(onProgress, {
+        status: 'processing',
+        progress: 96,
+        message: '已跳过 OCR 建索引'
+      });
+    }
+
     reportProgress(onProgress, {
       status: 'processing',
-      progress: 90,
+      progress: 96,
       message: '正在打包图片...'
     });
 
@@ -195,6 +255,24 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       }
     });
 
+    const manifest = {
+      sourceName,
+      generatedAt: new Date().toISOString(),
+      imageCount: images.length,
+      dedupe: dedupeSummary,
+      naming: namingSummary,
+      ocr: ocrSummary,
+      images: images.map((image) => ({
+        name: image.name,
+        page: image.page,
+        width: image.width,
+        height: image.height,
+        size: image.size,
+        ocrText: image.ocrText || ''
+      }))
+    };
+    outputZip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
+
     outputZip.writeZip(zipOutputPath);
 
     reportProgress(onProgress, {
@@ -206,7 +284,10 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
     return {
       images,
       zipPath: toPublicUploadPath(zipOutputPath),
-      dedupe: dedupeSummary
+      zipAbsolutePath: zipOutputPath,
+      dedupe: dedupeSummary,
+      naming: namingSummary,
+      ocr: ocrSummary
     };
   } catch (error) {
     console.error('提取图片错误:', error);
@@ -313,6 +394,217 @@ function runCommand(command, args, options = {}) {
       reject(new Error(details || `${command} 执行失败，退出码: ${code}`));
     });
   });
+}
+
+const toFileSafeToken = (value, fallback = 'image') => {
+  const normalized = normalizeUploadedFilename(value, fallback)
+    .replace(/\.[^.]+$/, '')
+    .replace(/[\s]+/g, '_')
+    .replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60);
+  return normalized || fallback;
+};
+
+const nextUniqueFileName = async (outputDir, preferredName, oldName, usedNames) => {
+  const ext = path.extname(preferredName);
+  const stem = path.basename(preferredName, ext) || 'image';
+  let candidate = preferredName;
+  let index = 2;
+
+  while (usedNames.has(candidate)) {
+    candidate = `${stem}_${index}${ext}`;
+    index += 1;
+  }
+
+  while (candidate !== oldName) {
+    const candidatePath = path.join(outputDir, candidate);
+    try {
+      await fs.promises.access(candidatePath, fs.constants.F_OK);
+      candidate = `${stem}_${index}${ext}`;
+      index += 1;
+    } catch (error) {
+      break;
+    }
+  }
+
+  usedNames.add(candidate);
+  return candidate;
+};
+
+async function applyAutoNaming(images, outputDir, sourceName, reportStageProgress) {
+  const safeSource = toFileSafeToken(sourceName, 'image');
+  const pageCounters = new Map();
+  const usedNames = new Set();
+  let renamedCount = 0;
+
+  reportStageProgress(8, '正在智能命名图片...');
+
+  const renamedImages = [];
+  for (let index = 0; index < images.length; index++) {
+    const image = images[index];
+    const oldName = String(image.name || '').trim();
+    const oldPath = path.join(outputDir, oldName);
+    const rawExt = path.extname(oldName).toLowerCase();
+    const ext = rawExt || '.png';
+    const page = Number.isFinite(Number(image.page)) ? Number(image.page) : 1;
+    const pageCounter = (pageCounters.get(page) || 0) + 1;
+    pageCounters.set(page, pageCounter);
+
+    const preferredName = `${safeSource}_p${String(page).padStart(3, '0')}_${String(pageCounter).padStart(3, '0')}${ext}`;
+    const nextName = await nextUniqueFileName(outputDir, preferredName, oldName, usedNames);
+
+    if (oldName && nextName !== oldName && fs.existsSync(oldPath)) {
+      const nextPath = path.join(outputDir, nextName);
+      await fs.promises.rename(oldPath, nextPath);
+      renamedCount += 1;
+    }
+
+    const finalPath = path.join(outputDir, nextName);
+    let fileSize = Number(image.size || 0);
+    try {
+      const stats = await fs.promises.stat(finalPath);
+      fileSize = stats.size;
+    } catch (error) {
+      // ignore
+    }
+
+    renamedImages.push({
+      ...image,
+      id: index + 1,
+      name: nextName,
+      path: toPublicUploadPath(finalPath),
+      size: fileSize
+    });
+
+    const stage = Math.round(((index + 1) / images.length) * 100);
+    reportStageProgress(stage, `正在智能命名 (${index + 1}/${images.length})`);
+  }
+
+  reportStageProgress(100, renamedCount > 0 ? `命名完成，已优化 ${renamedCount} 个文件名` : '命名完成，无需调整');
+  return {
+    images: renamedImages,
+    renamedCount
+  };
+}
+
+function resolveTesseractBinary() {
+  for (const candidate of TESSERACT_CANDIDATES) {
+    const trimmed = String(candidate || '').trim();
+    if (!trimmed) continue;
+
+    if (trimmed.includes('/') || trimmed.includes(path.sep)) {
+      if (fs.existsSync(trimmed)) return trimmed;
+      continue;
+    }
+
+    return trimmed;
+  }
+
+  return '';
+}
+
+const recognizeImageText = (binaryPath, filePath, lang, timeoutMs = 30 * 1000) => new Promise((resolve, reject) => {
+  const args = [filePath, 'stdout'];
+  if (lang) {
+    args.push('-l', lang);
+  }
+  args.push('--psm', '6');
+
+  const child = spawn(binaryPath, args, {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let stdout = '';
+  let stderr = '';
+
+  const timeoutId = setTimeout(() => {
+    child.kill('SIGKILL');
+    reject(new Error('OCR 识别超时'));
+  }, timeoutMs);
+
+  child.stdout.on('data', (chunk) => {
+    stdout += String(chunk || '');
+  });
+
+  child.stderr.on('data', (chunk) => {
+    stderr += String(chunk || '');
+  });
+
+  child.on('error', (error) => {
+    clearTimeout(timeoutId);
+    reject(error);
+  });
+
+  child.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (code === 0) {
+      resolve(stdout);
+      return;
+    }
+
+    reject(new Error(stderr.trim() || `tesseract 退出码: ${code}`));
+  });
+});
+
+const normalizeOcrText = (value) => String(value || '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+async function buildImageOcrIndex(images, outputDir, reportStageProgress) {
+  const binary = resolveTesseractBinary();
+  if (!binary) {
+    reportStageProgress(100, '未检测到 OCR 引擎（tesseract），已跳过自动 OCR');
+    return {
+      enabled: true,
+      engineAvailable: false,
+      processedCount: images.length,
+      indexedCount: 0,
+      failedCount: 0
+    };
+  }
+
+  let indexedCount = 0;
+  let failedCount = 0;
+  reportStageProgress(5, '正在建立 OCR 索引...');
+
+  for (let index = 0; index < images.length; index++) {
+    const image = images[index];
+    const filePath = path.join(outputDir, image.name);
+    let text = '';
+
+    try {
+      text = normalizeOcrText(await recognizeImageText(binary, filePath, 'chi_sim+eng'));
+    } catch (primaryError) {
+      try {
+        text = normalizeOcrText(await recognizeImageText(binary, filePath, 'eng'));
+      } catch (fallbackError) {
+        failedCount += 1;
+      }
+    }
+
+    if (text) indexedCount += 1;
+    image.ocrText = text;
+
+    const stage = Math.round(((index + 1) / images.length) * 100);
+    reportStageProgress(stage, `正在 OCR 识别 (${index + 1}/${images.length})`);
+  }
+
+  reportStageProgress(
+    100,
+    indexedCount > 0
+      ? `OCR 索引完成：${indexedCount}/${images.length} 张可检索`
+      : 'OCR 索引完成，未识别到可检索文本'
+  );
+
+  return {
+    enabled: true,
+    engineAvailable: true,
+    processedCount: images.length,
+    indexedCount,
+    failedCount
+  };
 }
 
 // 从Word文档中提取图片

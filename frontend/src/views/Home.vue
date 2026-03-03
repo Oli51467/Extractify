@@ -45,13 +45,7 @@
             v-if="activeTab === 'documents'"
             :project-id="selectedProject.id"
             :project-documents="projectDocuments"
-            :selected-batch-file-count="selectedBatchFileCount"
-            :batch-file-input-key="batchFileInputKey"
-            :batch-submitting="batchSubmitting"
-            v-model:batch-dedupe-enabled="batchDedupeEnabled"
-            @single-extracted="handleSingleExtracted"
-            @batch-files-change="handleBatchFilesChange"
-            @create-batch="submitBatch"
+            @upload-finished="handleSingleExtracted"
           />
 
           <AssetsTab
@@ -63,10 +57,6 @@
           <HistoryTab
             v-else-if="activeTab === 'history'"
             :project-runs="projectRuns"
-          />
-
-          <BatchesTab
-            v-else
             :project-batches="projectBatches"
             :expanded-batch-id="expandedBatchId"
             :expanded-batch-items="expandedBatchItems"
@@ -96,7 +86,6 @@ import WorkspaceTabs from '../components/workspace/WorkspaceTabs.vue'
 import DocumentsTab from '../components/workspace/DocumentsTab.vue'
 import AssetsTab from '../components/workspace/AssetsTab.vue'
 import HistoryTab from '../components/workspace/HistoryTab.vue'
-import BatchesTab from '../components/workspace/BatchesTab.vue'
 import ImageMerger from '../components/ImageMerger.vue'
 import AppCard from '../components/ui/AppCard.vue'
 import AppButton from '../components/ui/AppButton.vue'
@@ -118,18 +107,12 @@ const {
   projectBatches,
   galleryImages,
   zipUrls,
-  selectedBatchFileCount,
-  batchFileInputKey,
-  batchDedupeEnabled,
-  batchSubmitting,
   expandedBatchId,
   expandedBatchItems,
   createProjectFromInput,
   renameCurrentProject,
   deleteCurrentProject,
   refreshCurrentProject,
-  setBatchFiles,
-  submitBatch,
   toggleBatchDetail,
   retryBatchFailed,
   cancelBatchQueued,
@@ -191,10 +174,6 @@ const handleImportFromExtractProject = async () => {
 
 const handleSelectProject = (projectId) => {
   selectedProjectId.value = projectId
-}
-
-const handleBatchFilesChange = (files) => {
-  setBatchFiles(files)
 }
 </script>
 

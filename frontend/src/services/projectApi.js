@@ -28,6 +28,15 @@ export const apiFetch = async (url, options = {}) => {
 
 export const ensureSessionReady = () => apiFetch('/api/session')
 
+export const fetchShareDetail = async (token) => {
+  const safeToken = encodeURIComponent(String(token || '').trim())
+  if (!safeToken) {
+    throw new Error('无效的分享标识')
+  }
+  const data = await apiFetch(`/api/share/${safeToken}`)
+  return data.share
+}
+
 export const fetchProjects = async (workspaceType = 'extract') => {
   const query = workspaceType ? `?workspaceType=${encodeURIComponent(workspaceType)}` : ''
   const data = await apiFetch(`/api/projects${query}`)

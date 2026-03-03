@@ -56,6 +56,7 @@ const mapDocumentRow = (row) => {
     fileType: row.file_type,
     fileSize: Number(row.file_size || 0),
     storagePath: row.storage_path,
+    previewUrl: `/api/projects/${encodeURIComponent(row.project_id)}/documents/${encodeURIComponent(row.id)}/preview`,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -101,6 +102,7 @@ const mapAssetRow = (row) => {
     page: row.page == null ? null : Number(row.page),
     deduped: Number(row.deduped || 0) === 1,
     isPrimary: Number(row.is_primary || 0) === 1,
+    ocrText: String(row.ocr_text || '').trim(),
     sourceContext: {
       ...source,
       sourceName
@@ -601,8 +603,8 @@ const replaceRunAssets = (sessionId, projectId, runId, payload = {}) => {
     const insertStmt = db.prepare(`
       INSERT INTO assets (
         id, project_id, session_id, run_id, job_id, document_id, name, path, size, width, height, page,
-        deduped, is_primary, source_context_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        deduped, is_primary, ocr_text, source_context_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const now = nowIso();
@@ -623,6 +625,7 @@ const replaceRunAssets = (sessionId, projectId, runId, payload = {}) => {
         image.page == null ? null : Number(image.page),
         Number(image.deduped ? 1 : 0),
         Number(image.isPrimary === false ? 0 : 1),
+        sanitizeText(image.ocrText, 12000, ''),
         toJson({
           sourceName: normalizeUploadedFilename(payload.sourceName || run.sourceName || '', ''),
           page: image.page == null ? null : Number(image.page),
@@ -654,10 +657,11 @@ const listAssets = (sessionId, projectId, options = {}) => {
         AND (
           LOWER(a.name) LIKE ?
           OR LOWER(a.path) LIKE ?
+          OR LOWER(a.ocr_text) LIKE ?
         )
       ORDER BY a.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(projectId, sessionId, `%${keyword}%`, `%${keyword}%`, limit, offset)
+    `).all(projectId, sessionId, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, limit, offset)
     : db.prepare(`
       SELECT a.*
       FROM assets a

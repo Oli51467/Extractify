@@ -92,6 +92,7 @@ const initializeSchema = (dbInstance) => {
       page INTEGER,
       deduped INTEGER NOT NULL DEFAULT 0,
       is_primary INTEGER NOT NULL DEFAULT 1,
+      ocr_text TEXT NOT NULL DEFAULT '',
       source_context_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -100,6 +101,24 @@ const initializeSchema = (dbInstance) => {
     `,
     `CREATE INDEX IF NOT EXISTS idx_assets_project_created ON assets (project_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_assets_run_created ON assets (run_id, created_at DESC)`,
+    `
+    CREATE TABLE IF NOT EXISTS share_links (
+      id TEXT PRIMARY KEY,
+      token TEXT NOT NULL UNIQUE,
+      session_id TEXT NOT NULL,
+      project_id TEXT NOT NULL DEFAULT '',
+      run_id TEXT NOT NULL DEFAULT '',
+      job_id TEXT NOT NULL DEFAULT '',
+      source_name TEXT NOT NULL DEFAULT '',
+      zip_path TEXT NOT NULL,
+      image_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT
+    )
+    `,
+    `CREATE INDEX IF NOT EXISTS idx_share_links_token ON share_links (token)`,
+    `CREATE INDEX IF NOT EXISTS idx_share_links_expires ON share_links (expires_at)`,
     `
     CREATE TABLE IF NOT EXISTS batch_jobs (
       id TEXT PRIMARY KEY,
@@ -189,6 +208,15 @@ const initializeSchema = (dbInstance) => {
       CREATE INDEX IF NOT EXISTS idx_projects_session_type_updated
       ON projects (session_id, workspace_type, updated_at DESC)
     `).run();
+
+    const assetColumns = dbInstance.prepare('PRAGMA table_info(assets)').all();
+    const hasAssetOcrText = assetColumns.some((column) => column.name === 'ocr_text');
+    if (!hasAssetOcrText) {
+      dbInstance.prepare(`
+        ALTER TABLE assets
+        ADD COLUMN ocr_text TEXT NOT NULL DEFAULT ''
+      `).run();
+    }
   });
   migrate();
 };

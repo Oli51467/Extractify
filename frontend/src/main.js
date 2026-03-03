@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
 import Home from './views/Home.vue'
+import Share from './views/Share.vue'
 
 // 创建路由
 const router = createRouter({
@@ -16,6 +17,11 @@ const router = createRouter({
       path: '/mergify',
       name: 'DocPixMerge',
       component: Home
+    },
+    {
+      path: '/share/:token',
+      name: 'DocPixShare',
+      component: Share
     }
   ]
 })

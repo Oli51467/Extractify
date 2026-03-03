@@ -11,35 +11,37 @@
       <input
         ref="fileInputRef"
         type="file"
+        multiple
         accept=".docx,.doc,.pdf"
         :disabled="disabled || isUploading"
         @change="handleFileInput"
       />
       <AppIcon name="upload" class="upload-icon" />
-      <p class="upload-title">拖拽文档到此处或点击上传</p>
-      <p class="upload-tip">支持 .docx、.doc 和 .pdf 文件，单个文件不超过 50MB</p>
-      <p v-if="selectedFileName" class="upload-file">已选择：{{ selectedFileName }}</p>
-    </div>
-
-    <div class="upload-options">
-      <div class="upload-option-text">智能去重</div>
-      <button
-        class="dedupe-toggle-switch"
-        type="button"
-        role="switch"
-        :aria-checked="dedupeEnabled ? 'true' : 'false'"
-        :disabled="isUploading || disabled"
-        @click="toggleDedupeEnabled"
-      >
-        <span class="switch-track">
-          <span class="switch-thumb" />
-        </span>
-      </button>
+      <p class="upload-title">拖拽文档到此处或点击上传（单文件 / 批量）</p>
+      <p class="upload-tip">支持 .docx、.doc 和 .pdf 文件，单个文件不超过 50MB；智能去重默认开启</p>
+      <p v-if="selectedFileLabel" class="upload-file">已选择：{{ selectedFileLabel }}</p>
     </div>
 
     <div v-if="isUploading" class="upload-progress">
       <AppProgress :percentage="formattedProgress" />
       <p>{{ getProgressText() }}</p>
+    </div>
+
+    <div v-if="oneClickResult" class="one-click-result">
+      <div class="result-title">一键结果已生成</div>
+      <div class="result-meta">
+        <span>抽图 {{ oneClickResult.imageCount }} 张</span>
+        <span>去重 {{ oneClickResult.dedupedCount }} 张</span>
+        <span>OCR 命中 {{ oneClickResult.ocrIndexedCount }} 张</span>
+      </div>
+      <div class="result-actions">
+        <AppButton size="sm" variant="outline" tone="neutral" @click="copyShareLink">
+          复制分享链接
+        </AppButton>
+        <AppButton size="sm" :disabled="!oneClickResult.shareUrl" @click="openShareLink">
+          打开分享页
+        </AppButton>
+      </div>
     </div>
   </div>
 </template>
@@ -49,6 +51,7 @@ import { ref, computed, onUnmounted } from 'vue'
 import { notify } from '../services/notify'
 import AppIcon from './ui/AppIcon.vue'
 import AppProgress from './ui/AppProgress.vue'
+import AppButton from './ui/AppButton.vue'
 
 const props = defineProps({
   projectId: {
@@ -70,11 +73,12 @@ const backendProgress = ref(0)
 const backendMessage = ref('')
 const currentFileName = ref('')
 const fileType = ref('')
+const uploadMode = ref('single')
 const currentJobId = ref('')
-const selectedFileName = ref('')
-const dedupeEnabled = ref(true)
+const selectedFiles = ref([])
 const dragActive = ref(false)
 const sessionReady = ref(false)
+const oneClickResult = ref(null)
 const fileInputRef = ref(null)
 let progressPollTimer = null
 
@@ -85,6 +89,12 @@ const uploadAction = computed(() => {
     return `/api/projects/${encodeURIComponent(props.projectId)}/documents/extract-images`
   }
   return '/api/documents/extract-images'
+})
+
+const selectedFileLabel = computed(() => {
+  if (!selectedFiles.value.length) return ''
+  if (selectedFiles.value.length === 1) return selectedFiles.value[0]
+  return `${selectedFiles.value.length} 个文件`
 })
 
 const stopProgressPolling = () => {
@@ -139,14 +149,18 @@ const startProgressPolling = () => {
 }
 
 const getProgressText = () => {
+  if (uploadMode.value === 'batch') return backendMessage.value || '正在创建批量任务...'
   if (backendMessage.value) return backendMessage.value
   if (uploadTransportProgress.value < 100) return '正在上传文件...'
   return fileType.value === 'pdf' ? '正在处理 PDF...' : '正在处理 Word 文档...'
 }
 
-const toggleDedupeEnabled = () => {
-  if (isUploading.value || props.disabled) return
-  dedupeEnabled.value = !dedupeEnabled.value
+const toAbsoluteUrl = (value) => {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (raw.startsWith('/')) return `${window.location.origin}${raw}`
+  return `${window.location.origin}/${raw}`
 }
 
 const ensureSessionReady = async () => {
@@ -190,6 +204,30 @@ const validateFile = (file) => {
   }
 }
 
+const normalizeValidFiles = (files) => {
+  const source = Array.from(files || [])
+  const validFiles = []
+  let hasInvalid = false
+
+  source.forEach((file) => {
+    const validation = validateFile(file)
+    if (!validation.valid) {
+      hasInvalid = true
+      return
+    }
+    validFiles.push({
+      file,
+      type: validation.type
+    })
+  })
+
+  if (hasInvalid && validFiles.length > 0) {
+    notify.warning('部分文件不符合要求，已自动忽略')
+  }
+
+  return validFiles
+}
+
 const resetInputValue = () => {
   if (fileInputRef.value) {
     fileInputRef.value.value = ''
@@ -200,12 +238,25 @@ const handleUploadResponse = (response) => {
   stopProgressPolling()
 
   isUploading.value = false
+  uploadMode.value = 'single'
   uploadProgress.value = 100
   backendProgress.value = 100
   backendMessage.value = response.message || '处理完成'
 
   if (response.success) {
     const dedupedCount = Number(response?.dedupe?.dedupedCount || 0)
+    const ocrIndexedCount = Number(response?.ocr?.indexedCount || 0)
+    const shareUrl = toAbsoluteUrl(response?.share?.url || '')
+    const shareDownloadUrl = toAbsoluteUrl(response?.share?.downloadUrl || '')
+
+    oneClickResult.value = {
+      imageCount: Number(response?.images?.length || 0),
+      dedupedCount,
+      ocrIndexedCount,
+      shareUrl,
+      shareDownloadUrl
+    }
+
     const successMessage = dedupedCount > 0
       ? `成功提取 ${response.images.length} 张图片，已去重 ${dedupedCount} 张`
       : `成功提取 ${response.images.length} 张图片`
@@ -216,14 +267,17 @@ const handleUploadResponse = (response) => {
       zipUrl: response.zipUrl,
       source: currentFileName.value,
       jobId: response.jobId || currentJobId.value,
-      dedupe: response.dedupe || null
+      dedupe: response.dedupe || null,
+      naming: response.naming || null,
+      ocr: response.ocr || null,
+      share: response.share || null
     })
   } else {
     notify.error(response.message || '图片提取失败')
   }
 
   currentJobId.value = ''
-  selectedFileName.value = ''
+  selectedFiles.value = []
   resetInputValue()
 }
 
@@ -231,26 +285,24 @@ const handleUploadError = (error) => {
   stopProgressPolling()
 
   isUploading.value = false
+  uploadMode.value = 'single'
   uploadProgress.value = 0
   backendProgress.value = 0
   backendMessage.value = ''
   currentJobId.value = ''
+  selectedFiles.value = []
+  oneClickResult.value = null
 
   console.error('上传错误:', error)
   notify.error(error?.message || '上传失败，请重试')
+  resetInputValue()
 }
 
-const submitFile = async (file) => {
-  const validation = validateFile(file)
-  if (!validation.valid) {
-    resetInputValue()
-    selectedFileName.value = ''
-    return
-  }
-
-  fileType.value = validation.type
+const submitSingleFile = async (file, type) => {
+  fileType.value = type
+  uploadMode.value = 'single'
   currentFileName.value = file.name.replace(/\.[^/.]+$/, '')
-  selectedFileName.value = file.name
+  selectedFiles.value = [file.name]
 
   try {
     await ensureSessionReady()
@@ -260,6 +312,7 @@ const submitFile = async (file) => {
   }
 
   currentJobId.value = generateJobId()
+  oneClickResult.value = null
   isUploading.value = true
   uploadProgress.value = 5
   uploadTransportProgress.value = 0
@@ -270,7 +323,10 @@ const submitFile = async (file) => {
 
   const formData = new FormData()
   formData.append('file', file)
-  formData.append('dedupe', dedupeEnabled.value ? '1' : '0')
+  formData.append('dedupe', '1')
+  formData.append('ocr', '1')
+  formData.append('autoNaming', '1')
+  formData.append('share', '1')
 
   const xhr = new XMLHttpRequest()
   xhr.open('POST', uploadAction.value, true)
@@ -316,6 +372,84 @@ const submitFile = async (file) => {
   xhr.send(formData)
 }
 
+const submitBatchFiles = async (fileEntries) => {
+  if (!props.projectId) {
+    notify.warning('当前入口仅支持单文件解析，已自动处理第一个文件')
+    const first = fileEntries[0]
+    if (first) {
+      await submitSingleFile(first.file, first.type)
+    }
+    return
+  }
+
+  uploadMode.value = 'batch'
+  selectedFiles.value = fileEntries.map((item) => item.file.name)
+  oneClickResult.value = null
+  isUploading.value = true
+  uploadProgress.value = 10
+  uploadTransportProgress.value = 100
+  backendProgress.value = 10
+  backendMessage.value = '正在创建批量任务...'
+
+  try {
+    await ensureSessionReady()
+    const formData = new FormData()
+    fileEntries.forEach((item) => {
+      formData.append('files', item.file)
+    })
+    formData.append('dedupe', '1')
+    formData.append('name', `批处理 ${new Date().toLocaleString()}`)
+
+    const response = await fetch(`/api/projects/${encodeURIComponent(props.projectId)}/batches/extract-images`, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: formData
+    })
+
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || data.success === false) {
+      throw new Error(data.message || `请求失败 (${response.status})`)
+    }
+
+    backendProgress.value = 100
+    uploadProgress.value = 100
+    backendMessage.value = '批量任务创建成功'
+    isUploading.value = false
+
+    notify.success(`批量任务已提交，共 ${fileEntries.length} 个文件`)
+    emit('images-extracted', {
+      mode: 'batch',
+      batch: data.batch || null,
+      items: data.items || []
+    })
+  } catch (error) {
+    handleUploadError(error)
+    return
+  }
+
+  selectedFiles.value = []
+  resetInputValue()
+  uploadMode.value = 'single'
+}
+
+const submitFiles = async (files) => {
+  const validEntries = normalizeValidFiles(files)
+  if (!validEntries.length) {
+    selectedFiles.value = []
+    resetInputValue()
+    return
+  }
+
+  if (validEntries.length === 1) {
+    await submitSingleFile(validEntries[0].file, validEntries[0].type)
+    return
+  }
+
+  await submitBatchFiles(validEntries)
+}
+
 const openPicker = () => {
   if (props.disabled || isUploading.value) return
   if (fileInputRef.value) {
@@ -324,9 +458,9 @@ const openPicker = () => {
 }
 
 const handleFileInput = (event) => {
-  const file = event.target?.files?.[0]
-  if (file) {
-    submitFile(file)
+  const files = Array.from(event.target?.files || [])
+  if (files.length > 0) {
+    submitFiles(files)
   }
 }
 
@@ -343,10 +477,34 @@ const handleDrop = (event) => {
   dragActive.value = false
   if (props.disabled || isUploading.value) return
 
-  const file = event.dataTransfer?.files?.[0]
-  if (file) {
-    submitFile(file)
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (files.length > 0) {
+    submitFiles(files)
   }
+}
+
+const copyShareLink = async () => {
+  const url = oneClickResult.value?.shareUrl || ''
+  if (!url) {
+    notify.warning('暂无可复制的分享链接')
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(url)
+    notify.success('分享链接已复制')
+  } catch (error) {
+    notify.warning('复制失败，请手动复制链接')
+  }
+}
+
+const openShareLink = () => {
+  const url = oneClickResult.value?.shareUrl || ''
+  if (!url) {
+    notify.warning('分享链接不可用')
+    return
+  }
+  window.open(url, '_blank', 'noopener')
 }
 
 onUnmounted(() => {
@@ -418,69 +576,6 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
   margin: 0.2rem 0 0;
 }
 
-.upload-options {
-  align-items: center;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  border: 1px solid #e6ebf5;
-  border-radius: 999px;
-  display: inline-flex;
-  gap: 0.5rem;
-  justify-content: flex-start;
-  margin-top: 0.75rem;
-  max-width: 100%;
-  padding: 0.4rem 0.6rem;
-}
-
-.upload-option-text {
-  color: #6c7890;
-  font-size: 0.78rem;
-  line-height: 1.2;
-}
-
-.dedupe-toggle-switch {
-  background: none;
-  border: 0;
-  cursor: pointer;
-  display: inline-flex;
-  padding: 0;
-}
-
-.dedupe-toggle-switch:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.dedupe-toggle-switch .switch-track {
-  background: #c8d2e2;
-  border: 1px solid #bcc7d9;
-  border-radius: 999px;
-  height: 18px;
-  position: relative;
-  transition: all 0.2s ease;
-  width: 32px;
-}
-
-.dedupe-toggle-switch .switch-thumb {
-  background: #fff;
-  border-radius: 999px;
-  box-shadow: 0 2px 6px rgba(48, 62, 92, 0.22);
-  height: 13px;
-  left: 1.5px;
-  position: absolute;
-  top: 1.5px;
-  transition: all 0.2s ease;
-  width: 13px;
-}
-
-.dedupe-toggle-switch[aria-checked='true'] .switch-track {
-  background: #48b38d;
-  border-color: #3ea780;
-}
-
-.dedupe-toggle-switch[aria-checked='true'] .switch-thumb {
-  left: calc(100% - 14.5px);
-}
-
 .upload-progress {
   margin-top: 1rem;
 }
@@ -491,10 +586,37 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
   text-align: center;
 }
 
+.one-click-result {
+  background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+  border: 1px solid #dfe9fb;
+  border-radius: 12px;
+  margin-top: 0.95rem;
+  padding: 0.72rem 0.82rem;
+}
+
+.result-title {
+  color: #2a3a57;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.result-meta {
+  color: #667794;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.77rem;
+  gap: 0.55rem;
+  margin-top: 0.3rem;
+}
+
+.result-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.55rem;
+}
+
 @media (max-width: 640px) {
-  .upload-options {
-    border-radius: 12px;
-    display: flex;
+  .result-actions {
     flex-wrap: wrap;
   }
 }
