@@ -9,11 +9,18 @@
                 <div class="card-header">
                     <div class="header-content">
                         <h2>图片预览 (共{{ allImages.length }}张)</h2>
-                        <el-button type="danger" plain circle @click="clearAllImages" title="清空所有图片">
-                            <el-icon>
-                                <delete />
-                            </el-icon>
-                        </el-button>
+                        <AppButton
+                            tone="danger"
+                            variant="ghost"
+                            size="sm"
+                            shape="circle"
+                            @click="clearAllImages"
+                            title="清空所有图片"
+                        >
+                            <template #icon>
+                                <Delete />
+                            </template>
+                        </AppButton>
                     </div>
                 </div>
             </template>
@@ -26,6 +33,7 @@
 import { ref } from 'vue'
 import FileUpload from '../components/FileUpload.vue'
 import ImageGallery from '../components/ImageGallery.vue'
+import AppButton from '../components/ui/AppButton.vue'
 import { Delete } from '@element-plus/icons-vue'
 
 // 存储所有图片和压缩包URL

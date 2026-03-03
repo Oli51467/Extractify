@@ -5,6 +5,7 @@
       class="upload-area"
       drag
       action="/api/documents/extract-images"
+      :data="uploadData"
       :headers="uploadHeaders"
       :on-success="handleSuccess"
       :on-error="handleError"
@@ -21,6 +22,22 @@
         <div class="el-upload__tip">支持 .docx、.doc 格式的 Word 文档和 .pdf 格式的 PDF 文件</div>
       </template>
     </el-upload>
+
+    <div class="upload-options">
+      <div class="upload-option-text">智能去重</div>
+      <button
+        class="dedupe-toggle-switch"
+        type="button"
+        role="switch"
+        :aria-checked="dedupeEnabled ? 'true' : 'false'"
+        :disabled="isUploading"
+        @click="toggleDedupeEnabled"
+      >
+        <span class="switch-track">
+          <span class="switch-thumb" />
+        </span>
+      </button>
+    </div>
 
     <div v-if="isUploading" class="upload-progress">
       <el-progress :percentage="formattedProgress" :stroke-width="8" />
@@ -45,6 +62,7 @@ const uploadRef = ref(null)
 const currentFileName = ref('')
 const fileType = ref('')
 const currentJobId = ref('')
+const dedupeEnabled = ref(true)
 let progressPollTimer = null
 const sessionReady = ref(false)
 
@@ -111,6 +129,15 @@ const uploadHeaders = computed(() => ({
   'X-Requested-With': 'XMLHttpRequest',
   'X-Job-Id': currentJobId.value || ''
 }))
+
+const uploadData = computed(() => ({
+  dedupe: dedupeEnabled.value ? '1' : '0'
+}))
+
+const toggleDedupeEnabled = () => {
+  if (isUploading.value) return
+  dedupeEnabled.value = !dedupeEnabled.value
+}
 
 const ensureSessionReady = async () => {
   if (sessionReady.value) return true
@@ -186,13 +213,18 @@ const handleSuccess = (response) => {
   backendMessage.value = response.message || '处理完成'
 
   if (response.success) {
-    ElMessage.success(`成功提取 ${response.images.length} 张图片`)
+    const dedupedCount = Number(response?.dedupe?.dedupedCount || 0)
+    const successMessage = dedupedCount > 0
+      ? `成功提取 ${response.images.length} 张图片，已去重 ${dedupedCount} 张`
+      : `成功提取 ${response.images.length} 张图片`
+    ElMessage.success(successMessage)
 
     emit('images-extracted', {
       images: response.images,
       zipUrl: response.zipUrl,
       source: currentFileName.value,
-      jobId: response.jobId || currentJobId.value
+      jobId: response.jobId || currentJobId.value,
+      dedupe: response.dedupe || null
     })
 
     if (uploadRef.value) {
@@ -251,6 +283,77 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
   font-size: 48px;
   color: var(--primary-color);
   margin-bottom: 16px;
+}
+
+.upload-options {
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #e6ebf5;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.upload-option-text {
+  color: #6c7890;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.dedupe-toggle-switch {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  padding: 0;
+}
+
+.dedupe-toggle-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dedupe-toggle-switch .switch-track {
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: #c8d2e2;
+  border: 1px solid #bcc7d9;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.dedupe-toggle-switch .switch-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #fff;
+  position: absolute;
+  top: 1.5px;
+  left: 1.5px;
+  box-shadow: 0 2px 6px rgba(48, 62, 92, 0.22);
+  transition: all 0.2s ease;
+}
+
+.dedupe-toggle-switch[aria-checked='true'] .switch-track {
+  background: #48b38d;
+  border-color: #3ea780;
+}
+
+.dedupe-toggle-switch[aria-checked='true'] .switch-thumb {
+  left: calc(100% - 14.5px);
+}
+
+@media (max-width: 640px) {
+  .upload-options {
+    border-radius: 12px;
+    display: flex;
+    flex-wrap: wrap;
+  }
 }
 
 .upload-progress {

@@ -3,12 +3,12 @@
     <div class="gallery-header">
       <div class="gallery-actions">
         <el-dropdown v-if="zipUrls.length > 0" @command="handleZipDownload">
-          <el-button plain type="primary">
-            <el-icon>
-              <download />
-            </el-icon>
-            下载 <el-icon class="el-icon--right"><arrow-down /></el-icon>
-          </el-button>
+          <AppButton tone="primary" variant="outline">
+            <template #icon>
+              <Download />
+            </template>
+            下载 <ArrowDown class="app-inline-arrow" />
+          </AppButton>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item v-for="(zip, index) in zipUrls" :key="index" :command="zip">
@@ -18,11 +18,35 @@
           </template>
         </el-dropdown>
 
+        <AppButton
+          tone="success"
+          :loading="ocrIndexing"
+          :disabled="images.length === 0"
+          @click="buildOcrIndex"
+        >
+          <template #icon>
+            <Search />
+          </template>
+          {{ ocrButtonText }}
+        </AppButton>
       </div>
 
       <div class="gallery-filter">
-        <el-input v-model="searchQuery" placeholder="搜索图片..." prefix-icon="Search" clearable />
+        <el-input
+          v-model="searchQuery"
+          placeholder="按文件名 / 来源 / OCR 文字搜索..."
+          :prefix-icon="Search"
+          clearable
+        />
       </div>
+    </div>
+
+    <div v-if="ocrStatus" class="ocr-status">
+      <el-progress v-if="ocrIndexing" :percentage="ocrProgress" :stroke-width="8" />
+      <p>{{ ocrStatus }}</p>
+      <p v-if="!ocrIndexing && pendingOcrCount > 0" class="ocr-hint">
+        还有 {{ pendingOcrCount }} 张图片未建立 OCR 索引，可继续补全。
+      </p>
     </div>
 
     <div v-if="filteredImages.length > 0" class="gallery-grid">
@@ -33,22 +57,32 @@
         <div class="image-info">
           <div class="info-top">
             <span class="image-name">{{ image.name }}</span>
-            <el-button type="primary" text size="small" @click.stop="downloadImage(image)" title="下载">
-              <el-icon>
-                <download />
-              </el-icon>
-            </el-button>
+            <AppButton
+              tone="primary"
+              variant="ghost"
+              size="sm"
+              shape="circle"
+              @click.stop="downloadImage(image)"
+              title="下载"
+            >
+              <template #icon>
+                <Download />
+              </template>
+            </AppButton>
           </div>
           <div class="info-meta">
             <span class="image-size">{{ formatSize(image.size) }}</span>
-            <span class="image-source" v-if="image.source">{{ image.source }}</span>
+            <span v-if="image.source" class="image-source">{{ image.source }}</span>
+          </div>
+          <div v-if="getOcrPreview(image)" class="ocr-preview" :title="getIndexedText(image)">
+            OCR：{{ getOcrPreview(image) }}
           </div>
         </div>
       </div>
     </div>
 
     <div v-else class="no-images">
-      <el-empty description="暂无图片" />
+      <el-empty description="暂无匹配图片" />
     </div>
 
     <el-dialog v-model="previewVisible" width="80%" :close-on-click-modal="true" :destroy-on-close="true" center>
@@ -58,7 +92,7 @@
           <span v-if="selectedImage" class="preview-meta">{{ formatSize(selectedImage.size) }}</span>
         </div>
       </template>
-      <div class="preview-body" v-if="selectedImage">
+      <div v-if="selectedImage" class="preview-body">
         <img :src="selectedImage.path" :alt="selectedImage.name" />
       </div>
     </el-dialog>
@@ -66,9 +100,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { Download, ArrowDown, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import AppButton from './ui/AppButton.vue'
 
 const props = defineProps({
   images: {
@@ -81,34 +116,222 @@ const props = defineProps({
   }
 })
 
-// 搜索功能
+const OCR_PRIMARY_LANG = 'chi_sim+eng'
+const OCR_FALLBACK_LANG = 'eng'
+
 const searchQuery = ref('')
 const previewVisible = ref(false)
 const selectedImage = ref(null)
 
-// 过滤图片
-const filteredImages = computed(() => {
-  if (!searchQuery.value) return props.images
+const ocrIndexing = ref(false)
+const ocrProgress = ref(0)
+const ocrStatus = ref('')
+const ocrIndex = ref({})
 
-  const query = searchQuery.value.toLowerCase()
-  return props.images.filter(img =>
-    img.name.toLowerCase().includes(query) ||
-    (img.source && img.source.toLowerCase().includes(query))
-  )
+const activeOcrMeta = ref({
+  current: 0,
+  total: 1
 })
 
-// 格式化文件大小
+let tesseractModule = null
+let ocrWorker = null
+
+const getImageKey = (image) => `${image.id || image.name || 'image'}::${image.path || ''}`
+
+const hasOcrIndex = (image) => Object.prototype.hasOwnProperty.call(ocrIndex.value, getImageKey(image))
+
+const getIndexedText = (image) => ocrIndex.value[getImageKey(image)] || ''
+
+const getOcrPreview = (image) => {
+  const text = getIndexedText(image)
+  if (!text) return ''
+  return text.length > 42 ? `${text.slice(0, 42)}...` : text
+}
+
+const indexedImageCount = computed(() => props.images.filter((image) => hasOcrIndex(image)).length)
+
+const pendingOcrCount = computed(() => Math.max(props.images.length - indexedImageCount.value, 0))
+
+const ocrButtonText = computed(() => {
+  if (ocrIndexing.value) return 'OCR 建索引中'
+  if (indexedImageCount.value === 0) return 'OCR 建索引'
+  if (pendingOcrCount.value > 0) return `OCR 补全索引 (${pendingOcrCount.value})`
+  return 'OCR 重新识别'
+})
+
+const filteredImages = computed(() => {
+  const query = searchQuery.value.trim().toLowerCase()
+  if (!query) return props.images
+
+  return props.images.filter((image) => {
+    const name = (image.name || '').toLowerCase()
+    const source = (image.source || '').toLowerCase()
+    const ocrText = getIndexedText(image).toLowerCase()
+
+    return name.includes(query) || source.includes(query) || ocrText.includes(query)
+  })
+})
+
+watch(
+  () => props.images.map((image) => getImageKey(image)),
+  (keys) => {
+    const keep = new Set(keys)
+    const nextIndex = {}
+
+    for (const [key, value] of Object.entries(ocrIndex.value)) {
+      if (keep.has(key)) {
+        nextIndex[key] = value
+      }
+    }
+
+    if (Object.keys(nextIndex).length !== Object.keys(ocrIndex.value).length) {
+      ocrIndex.value = nextIndex
+    }
+
+    if (keys.length === 0) {
+      ocrStatus.value = ''
+      ocrProgress.value = 0
+    }
+  },
+  { immediate: true }
+)
+
+const handleWorkerLog = (message = {}) => {
+  if (!ocrIndexing.value || typeof message.progress !== 'number') return
+
+  const progress = Math.min(1, Math.max(0, message.progress))
+  const { current, total } = activeOcrMeta.value
+  const overallProgress = ((current + progress) / Math.max(total, 1)) * 100
+
+  if (overallProgress > ocrProgress.value) {
+    ocrProgress.value = Number(overallProgress.toFixed(1))
+  }
+}
+
+const loadTesseractModule = async () => {
+  if (tesseractModule) return tesseractModule
+
+  const imported = await import('tesseract.js')
+  tesseractModule = imported.default || imported
+  return tesseractModule
+}
+
+const disposeWorker = async () => {
+  if (!ocrWorker || typeof ocrWorker.terminate !== 'function') {
+    ocrWorker = null
+    return
+  }
+
+  try {
+    await ocrWorker.terminate()
+  } catch (error) {
+    console.error('释放 OCR Worker 失败:', error)
+  }
+
+  ocrWorker = null
+}
+
+const initWorker = async () => {
+  if (ocrWorker) return ocrWorker
+
+  const moduleRef = await loadTesseractModule()
+  const createWorker = moduleRef.createWorker
+
+  if (typeof createWorker !== 'function') {
+    throw new Error('OCR 引擎初始化失败')
+  }
+
+  try {
+    ocrWorker = await createWorker(OCR_PRIMARY_LANG, 1, { logger: handleWorkerLog })
+    return ocrWorker
+  } catch (primaryError) {
+    try {
+      ocrWorker = await createWorker(OCR_FALLBACK_LANG, 1, { logger: handleWorkerLog })
+      return ocrWorker
+    } catch (fallbackError) {
+      throw fallbackError || primaryError || new Error('OCR 引擎启动失败')
+    }
+  }
+}
+
+const buildOcrIndex = async () => {
+  if (ocrIndexing.value) return
+  if (!props.images.length) {
+    ElMessage.warning('暂无图片可建立 OCR 索引')
+    return
+  }
+
+  const shouldReindexAll = indexedImageCount.value > 0 && pendingOcrCount.value === 0
+  const targets = shouldReindexAll
+    ? props.images
+    : props.images.filter((image) => !hasOcrIndex(image))
+
+  if (!targets.length) {
+    ElMessage.success('OCR 索引已是最新')
+    return
+  }
+
+  if (shouldReindexAll) {
+    ocrIndex.value = {}
+  }
+
+  ocrIndexing.value = true
+  ocrProgress.value = 0
+  ocrStatus.value = '正在初始化 OCR 引擎...'
+
+  try {
+    const worker = await initWorker()
+
+    let successCount = 0
+    const total = targets.length
+
+    for (let index = 0; index < total; index++) {
+      const image = targets[index]
+      activeOcrMeta.value = {
+        current: index,
+        total
+      }
+      ocrStatus.value = `正在识别 (${index + 1}/${total})：${image.name}`
+
+      try {
+        const result = await worker.recognize(image.path)
+        const text = (result?.data?.text || '').replace(/\s+/g, ' ').trim()
+
+        ocrIndex.value[getImageKey(image)] = text
+        successCount += 1
+      } catch (error) {
+        console.error('OCR 识别失败:', image?.name, error)
+        ocrIndex.value[getImageKey(image)] = ''
+      }
+
+      const stepProgress = ((index + 1) / total) * 100
+      if (stepProgress > ocrProgress.value) {
+        ocrProgress.value = Number(stepProgress.toFixed(1))
+      }
+    }
+
+    ocrStatus.value = `OCR 索引完成：${successCount}/${total} 张已处理，可直接搜索图片文字`
+    ElMessage.success('OCR 建索引完成，可按图片中文字搜索')
+  } catch (error) {
+    console.error('OCR 建索引失败:', error)
+    ocrStatus.value = `OCR 索引失败：${error.message || '请稍后重试'}`
+    ElMessage.error(ocrStatus.value)
+  } finally {
+    activeOcrMeta.value = { current: 0, total: 1 }
+    ocrIndexing.value = false
+  }
+}
+
 const formatSize = (bytes) => {
-  if (bytes === 0) return '0 B'
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
 
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
 
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
 }
 
-// 下载单个图片
 const downloadImage = (image) => {
   const link = document.createElement('a')
   link.href = image.path
@@ -118,7 +341,6 @@ const downloadImage = (image) => {
   document.body.removeChild(link)
 }
 
-// 下载指定压缩包
 const handleZipDownload = (zip) => {
   if (!zip || !zip.url) {
     ElMessage.warning('压缩包信息无效')
@@ -127,46 +349,39 @@ const handleZipDownload = (zip) => {
   downloadZip(zip.url, zip.fileName)
 }
 
-// 下载所有图片（压缩包）
-const downloadAllImages = () => {
-  if (props.zipUrls.length > 0) {
-    downloadZip(props.zipUrls[0].url, props.zipUrls[0].fileName)
-  } else {
-    ElMessage.warning('没有可下载的压缩包')
-  }
-}
-
-// 下载压缩包
 const downloadZip = (url, fileName = 'images.zip') => {
   fetch(url)
-    .then(response => {
+    .then((response) => {
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`)
       }
       return response.blob()
     })
-    .then(blob => {
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.style.display = 'none'
-      a.href = url
-      a.download = fileName || 'images.zip'
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+    .then((blob) => {
+      const blobUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.style.display = 'none'
+      link.href = blobUrl
+      link.download = fileName || 'images.zip'
+      document.body.appendChild(link)
+      link.click()
+      window.URL.revokeObjectURL(blobUrl)
+      document.body.removeChild(link)
     })
-    .catch(error => {
+    .catch((error) => {
       console.error('下载失败:', error)
-      ElMessage.error('下载失败: ' + error.message)
+      ElMessage.error(`下载失败: ${error.message}`)
     })
 }
 
-// 打开图片预览
 const openPreview = (image) => {
   selectedImage.value = image
   previewVisible.value = true
 }
+
+onBeforeUnmount(() => {
+  disposeWorker().catch(() => {})
+})
 </script>
 
 <style lang="scss" scoped>
@@ -183,8 +398,35 @@ const openPreview = (image) => {
   gap: 1rem;
 }
 
+.gallery-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.app-inline-arrow {
+  height: 1em;
+  width: 1em;
+}
+
 .gallery-filter {
-  width: 250px;
+  width: 320px;
+  max-width: 100%;
+}
+
+.ocr-status {
+  margin-bottom: 1rem;
+
+  p {
+    margin-top: 0.5rem;
+    color: #606266;
+    font-size: 0.875rem;
+  }
+
+  .ocr-hint {
+    color: #909399;
+  }
 }
 
 .gallery-grid {
@@ -224,7 +466,7 @@ const openPreview = (image) => {
   padding: 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.35rem;
 
   .info-top {
     display: flex;
@@ -255,9 +497,19 @@ const openPreview = (image) => {
 
     .image-source {
       font-size: 0.75rem;
-      color: #409EFF;
+      color: #409eff;
     }
   }
+}
+
+.ocr-preview {
+  color: #606266;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .no-images {

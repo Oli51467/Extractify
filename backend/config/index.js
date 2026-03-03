@@ -65,6 +65,11 @@ const config = {
   },
   tools: {
     sofficePath: process.env.SOFFICE_PATH || ''
+  },
+  processing: {
+    imageDedupeEnabled: process.env.IMAGE_DEDUPE_ENABLED !== 'false',
+    imageDedupeHammingThreshold: toNumber(process.env.IMAGE_DEDUPE_HAMMING_THRESHOLD, 6, 0),
+    imageDedupeAspectTolerance: toNumber(process.env.IMAGE_DEDUPE_ASPECT_TOLERANCE, 0.03, 0)
   }
 };
 

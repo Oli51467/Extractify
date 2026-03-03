@@ -4,10 +4,19 @@ const documentService = require('../services/documentService');
 const config = require('../config');
 const jobService = require('../services/jobService');
 
+const parseBooleanFlag = (value, defaultValue = true) => {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return defaultValue;
+};
+
 // 处理上传的文档并提取图片
 exports.extractImages = async (req, res) => {
   const jobId = req.jobId || jobService.sanitizeJobId(req.headers['x-job-id']);
   const sessionId = req.sessionId;
+  const dedupeEnabled = parseBooleanFlag(req.body?.dedupe, config.processing.imageDedupeEnabled);
   req.setTimeout(config.server.requestTimeoutMs);
 
   try {
@@ -33,7 +42,8 @@ exports.extractImages = async (req, res) => {
       progress: 10,
       message: '文件上传完成，等待处理...',
       sourceFileName: req.file.originalname || '',
-      fileType: fileExt
+      fileType: fileExt,
+      dedupeEnabled
     }, sessionId);
 
     // 检查文件类型
@@ -67,6 +77,7 @@ exports.extractImages = async (req, res) => {
         });
 
         return documentService.extractImages(inputFilePath, outputDir, {
+          enableDedupe: dedupeEnabled,
           onProgress: reportProgress
         });
       }, 15);
@@ -78,7 +89,8 @@ exports.extractImages = async (req, res) => {
           message: '文档中未找到图片',
           result: {
             imageCount: 0,
-            zipUrl: ''
+            zipUrl: '',
+            dedupe: result.dedupe || null
           }
         }, sessionId);
 
@@ -87,6 +99,7 @@ exports.extractImages = async (req, res) => {
           message: '文档中未找到图片',
           images: [],
           zipUrl: '',
+          dedupe: result.dedupe || null,
           jobId
         });
       }
@@ -94,10 +107,13 @@ exports.extractImages = async (req, res) => {
       jobService.updateJob(jobId, {
         status: 'completed',
         progress: 100,
-        message: `图片提取成功，共 ${result.images.length} 张`,
+        message: result.dedupe && result.dedupe.dedupedCount > 0
+          ? `图片提取成功，共 ${result.images.length} 张（已去重 ${result.dedupe.dedupedCount} 张）`
+          : `图片提取成功，共 ${result.images.length} 张`,
         result: {
           imageCount: result.images.length,
-          zipUrl: result.zipPath
+          zipUrl: result.zipPath,
+          dedupe: result.dedupe || null
         }
       }, sessionId);
 
@@ -106,6 +122,7 @@ exports.extractImages = async (req, res) => {
         message: '图片提取成功',
         images: result.images,
         zipUrl: result.zipPath,
+        dedupe: result.dedupe || null,
         jobId
       });
     } catch (extractError) {

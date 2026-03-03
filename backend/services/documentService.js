@@ -1,9 +1,10 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 const uuid = require('uuid').v4;
-const { createCanvas } = require('canvas');
+const { createCanvas, loadImage } = require('canvas');
 const config = require('../config');
 
 // 为 pdf.js 添加 Node.js 兼容性
@@ -78,9 +79,15 @@ const toPublicUploadPath = (absolutePath) => {
   return `/uploads/${normalized}`;
 };
 
+const HASH_WIDTH = 9;
+const HASH_HEIGHT = 8;
+
 // 提取文档中的图片
 exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
   const onProgress = options.onProgress;
+  const dedupeEnabled = typeof options.enableDedupe === 'boolean'
+    ? options.enableDedupe
+    : config.processing.imageDedupeEnabled;
   const tempDir = path.join(config.paths.tempRoot, uuid());
 
   try {
@@ -112,13 +119,44 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       images = await extractImagesFromDocx(sourcePath, outputDir, extractReporter);
     }
 
+    let dedupeSummary = {
+      enabled: dedupeEnabled,
+      originalCount: images.length,
+      keptCount: images.length,
+      dedupedCount: 0
+    };
+
     if (images.length === 0) {
       reportProgress(onProgress, {
         status: 'processing',
         progress: 98,
         message: '文档中未检测到可提取图片'
       });
-      return { images: [], zipPath: '' };
+      return {
+        images: [],
+        zipPath: '',
+        dedupe: dedupeSummary
+      };
+    }
+
+    if (dedupeEnabled && images.length > 1) {
+      const dedupeReporter = createStageReporter(onProgress, 85, 5);
+      const dedupeResult = await dedupeSimilarImages(images, outputDir, dedupeReporter, {
+        hammingThreshold: config.processing.imageDedupeHammingThreshold,
+        aspectTolerance: config.processing.imageDedupeAspectTolerance
+      });
+
+      images = dedupeResult.images;
+      dedupeSummary = {
+        ...dedupeResult.summary,
+        enabled: true
+      };
+    } else {
+      reportProgress(onProgress, {
+        status: 'processing',
+        progress: 88,
+        message: dedupeEnabled ? '图片数量较少，已跳过去重' : '已跳过智能去重'
+      });
     }
 
     reportProgress(onProgress, {
@@ -147,7 +185,8 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
 
     return {
       images,
-      zipPath: toPublicUploadPath(zipOutputPath)
+      zipPath: toPublicUploadPath(zipOutputPath),
+      dedupe: dedupeSummary
     };
   } catch (error) {
     console.error('提取图片错误:', error);
@@ -325,6 +364,227 @@ async function extractImagesFromDocx(docxPath, outputDir, reportStageProgress) {
       console.error('清理Word临时目录失败:', cleanupError);
     }
   }
+}
+
+const toSafeNumber = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const getPixelCount = (width, height) => {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return 0;
+  return Math.max(0, Math.floor(width) * Math.floor(height));
+};
+
+const getAspectRatio = (width, height) => {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || height === 0) return null;
+  return width / height;
+};
+
+const isAspectRatioClose = (ratioA, ratioB, tolerance) => {
+  if (!Number.isFinite(ratioA) || !Number.isFinite(ratioB)) return true;
+  return Math.abs(ratioA - ratioB) <= tolerance;
+};
+
+const hammingDistance = (hashA, hashB) => {
+  if (!hashA || !hashB || hashA.length !== hashB.length) return Number.MAX_SAFE_INTEGER;
+  let distance = 0;
+  for (let index = 0; index < hashA.length; index++) {
+    if (hashA[index] !== hashB[index]) distance += 1;
+  }
+  return distance;
+};
+
+const createDifferenceHash = async (buffer) => {
+  const image = await loadImage(buffer);
+  const width = toSafeNumber(image.width);
+  const height = toSafeNumber(image.height);
+
+  if (!width || !height) {
+    return {
+      hash: '',
+      width: null,
+      height: null
+    };
+  }
+
+  const canvas = createCanvas(HASH_WIDTH, HASH_HEIGHT);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, HASH_WIDTH, HASH_HEIGHT);
+  ctx.drawImage(image, 0, 0, HASH_WIDTH, HASH_HEIGHT);
+
+  const { data } = ctx.getImageData(0, 0, HASH_WIDTH, HASH_HEIGHT);
+  let hash = '';
+
+  for (let y = 0; y < HASH_HEIGHT; y++) {
+    for (let x = 0; x < HASH_WIDTH - 1; x++) {
+      const idx = (y * HASH_WIDTH + x) * 4;
+      const rightIdx = (y * HASH_WIDTH + x + 1) * 4;
+
+      const gray = data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114;
+      const rightGray = data[rightIdx] * 0.299 + data[rightIdx + 1] * 0.587 + data[rightIdx + 2] * 0.114;
+
+      hash += gray >= rightGray ? '1' : '0';
+    }
+  }
+
+  return {
+    hash,
+    width,
+    height
+  };
+};
+
+const shouldPreferCandidate = (candidate, current) => {
+  const candidatePixels = getPixelCount(candidate.width, candidate.height);
+  const currentPixels = getPixelCount(current.width, current.height);
+
+  if (candidatePixels !== currentPixels) {
+    return candidatePixels > currentPixels;
+  }
+
+  return candidate.byteSize > current.byteSize;
+};
+
+const findMatchedRecordIndex = (records, candidate, hammingThreshold, aspectTolerance) => {
+  if (candidate.exactHash) {
+    const exactIndex = records.findIndex((record) => record.exactHash && record.exactHash === candidate.exactHash);
+    if (exactIndex >= 0) return exactIndex;
+  }
+
+  if (!candidate.diffHash) return -1;
+
+  let targetIndex = -1;
+  let bestDistance = Number.MAX_SAFE_INTEGER;
+
+  for (let index = 0; index < records.length; index++) {
+    const record = records[index];
+    if (!record.diffHash) continue;
+    if (!isAspectRatioClose(record.aspectRatio, candidate.aspectRatio, aspectTolerance)) continue;
+
+    const distance = hammingDistance(record.diffHash, candidate.diffHash);
+    if (distance > hammingThreshold) continue;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      targetIndex = index;
+    }
+  }
+
+  return targetIndex;
+};
+
+const buildImageRecord = async (image, outputDir) => {
+  const filePath = path.join(outputDir, image.name);
+  const fileBuffer = await fs.promises.readFile(filePath);
+  const stats = await fs.promises.stat(filePath);
+  const exactHash = crypto.createHash('sha1').update(fileBuffer).digest('hex');
+
+  let diffHash = '';
+  let width = toSafeNumber(image.width);
+  let height = toSafeNumber(image.height);
+
+  try {
+    const hashResult = await createDifferenceHash(fileBuffer);
+    diffHash = hashResult.hash;
+    width = hashResult.width || width;
+    height = hashResult.height || height;
+  } catch (error) {
+    // 部分格式（如 emf）无法解码时保留原图，不参与相似去重
+  }
+
+  return {
+    image,
+    filePath,
+    byteSize: stats.size,
+    exactHash,
+    diffHash,
+    width,
+    height,
+    aspectRatio: getAspectRatio(width, height)
+  };
+};
+
+async function dedupeSimilarImages(images, outputDir, reportStageProgress, options = {}) {
+  const hammingThreshold = Number.isFinite(Number(options.hammingThreshold))
+    ? Number(options.hammingThreshold)
+    : 6;
+  const aspectTolerance = Number.isFinite(Number(options.aspectTolerance))
+    ? Number(options.aspectTolerance)
+    : 0.03;
+
+  reportStageProgress(5, '正在分析图片相似度...');
+
+  const uniqueRecords = [];
+  const duplicateRecords = [];
+
+  for (let index = 0; index < images.length; index++) {
+    const image = images[index];
+    try {
+      const record = await buildImageRecord(image, outputDir);
+      const matchedIndex = findMatchedRecordIndex(uniqueRecords, record, hammingThreshold, aspectTolerance);
+
+      if (matchedIndex < 0) {
+        uniqueRecords.push(record);
+      } else if (shouldPreferCandidate(record, uniqueRecords[matchedIndex])) {
+        duplicateRecords.push(uniqueRecords[matchedIndex]);
+        uniqueRecords[matchedIndex] = record;
+      } else {
+        duplicateRecords.push(record);
+      }
+    } catch (error) {
+      console.error(`去重分析失败，跳过文件 ${image?.name}:`, error);
+      uniqueRecords.push({
+        image,
+        filePath: path.join(outputDir, image.name),
+        byteSize: Number(image.size) || 0,
+        exactHash: '',
+        diffHash: '',
+        width: toSafeNumber(image.width),
+        height: toSafeNumber(image.height),
+        aspectRatio: getAspectRatio(toSafeNumber(image.width), toSafeNumber(image.height))
+      });
+    }
+
+    const stage = Math.round(((index + 1) / images.length) * 85);
+    reportStageProgress(stage, `正在智能去重 (${index + 1}/${images.length})`);
+  }
+
+  const keepSet = new Set(uniqueRecords.map((record) => record.filePath));
+  let removedCount = 0;
+
+  for (const record of duplicateRecords) {
+    if (!record.filePath || keepSet.has(record.filePath)) continue;
+    try {
+      await fs.promises.rm(record.filePath, { force: true });
+      removedCount += 1;
+    } catch (error) {
+      console.error(`删除重复图片失败: ${record.filePath}`, error);
+    }
+  }
+
+  const dedupedImages = uniqueRecords.map((record, index) => ({
+    ...record.image,
+    id: index + 1,
+    size: Number(record.byteSize) || Number(record.image.size) || 0,
+    width: record.width || record.image.width || null,
+    height: record.height || record.image.height || null
+  }));
+
+  if (removedCount > 0) {
+    reportStageProgress(100, `智能去重完成，已去重 ${removedCount} 张，保留最高分辨率原图`);
+  } else {
+    reportStageProgress(100, '智能去重完成，未发现重复图片');
+  }
+
+  return {
+    images: dedupedImages,
+    summary: {
+      originalCount: images.length,
+      keptCount: dedupedImages.length,
+      dedupedCount: removedCount
+    }
+  };
 }
 
 // 从PDF文件中提取图片
