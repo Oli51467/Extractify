@@ -52,3 +52,4 @@ coverage/
 .cache/ 
 
 tmp_*
+backend/data/*
