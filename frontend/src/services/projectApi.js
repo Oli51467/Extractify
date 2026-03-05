@@ -26,7 +26,63 @@ export const apiFetch = async (url, options = {}) => {
   return data
 }
 
-export const ensureSessionReady = () => apiFetch('/api/session')
+const normalizeSessionState = (payload = {}) => {
+  const auth = payload?.auth && typeof payload.auth === 'object'
+    ? payload.auth
+    : { enabled: false, providers: {} }
+
+  return {
+    authenticated: Boolean(payload?.authenticated),
+    user: payload?.user || null,
+    auth: {
+      enabled: Boolean(auth.enabled),
+      providers: {
+        google: {
+          enabled: Boolean(auth?.providers?.google?.enabled)
+        },
+        github: {
+          enabled: Boolean(auth?.providers?.github?.enabled)
+        }
+      }
+    }
+  }
+}
+
+export const fetchSessionState = async () => {
+  const data = await apiFetch('/api/session')
+  return normalizeSessionState(data || {})
+}
+
+export const ensureSessionReady = async (options = {}) => {
+  const requireAuth = Object.prototype.hasOwnProperty.call(options, 'requireAuth')
+    ? Boolean(options.requireAuth)
+    : true
+  const session = await fetchSessionState()
+
+  if (requireAuth && session.auth.enabled && !session.authenticated) {
+    throw new Error('请先登录后再继续')
+  }
+
+  return session
+}
+
+export const startOAuthLogin = (provider, redirectPath = '/') => {
+  const normalizedProvider = String(provider || '').trim().toLowerCase()
+  const safeRedirect = String(redirectPath || '').trim()
+  if (!normalizedProvider) return
+
+  const query = new URLSearchParams()
+  if (safeRedirect.startsWith('/')) {
+    query.set('redirect', safeRedirect)
+  } else {
+    query.set('redirect', '/')
+  }
+
+  const target = `/api/auth/${encodeURIComponent(normalizedProvider)}/start?${query.toString()}`
+  window.location.assign(target)
+}
+
+export const logoutSession = () => apiFetch('/api/auth/logout', { method: 'POST' })
 
 export const fetchShareDetail = async (token) => {
   const safeToken = encodeURIComponent(String(token || '').trim())
@@ -82,6 +138,20 @@ export const fetchProjectDocuments = async (projectId, limit = 200) => {
 export const fetchProjectAssets = async (projectId, limit = 500) => {
   const data = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}/assets?limit=${limit}`)
   return data.assets || []
+}
+
+export const updateProjectAssetOcr = async (projectId, assetId, payload = {}) => {
+  const data = await apiFetch(
+    `/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/ocr`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload || {})
+    }
+  )
+  return data.asset || null
 }
 
 export const fetchProjectRuns = async (projectId, limit = 200) => {

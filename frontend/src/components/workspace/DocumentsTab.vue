@@ -59,6 +59,8 @@ const normalizeFileExt = (value) => String(value || '').trim().toLowerCase()
 const resolveFileTypeLabel = (fileType) => {
   const ext = normalizeFileExt(fileType)
   if (ext === '.pdf' || ext === 'pdf') return 'PDF'
+  if (ext === '.md' || ext === '.markdown' || ext === 'md' || ext === 'markdown') return 'MD'
+  if (ext === '.ppt' || ext === '.pptx' || ext === 'ppt' || ext === 'pptx') return 'PPT'
   if (ext === '.doc' || ext === '.docx' || ext === 'doc' || ext === 'docx') return 'Word'
   return 'File'
 }
@@ -66,6 +68,8 @@ const resolveFileTypeLabel = (fileType) => {
 const resolveFileTypeClass = (fileType) => {
   const ext = normalizeFileExt(fileType)
   if (ext === '.pdf' || ext === 'pdf') return 'is-pdf'
+  if (ext === '.md' || ext === '.markdown' || ext === 'md' || ext === 'markdown') return 'is-md'
+  if (ext === '.ppt' || ext === '.pptx' || ext === 'ppt' || ext === 'pptx') return 'is-ppt'
   if (ext === '.doc' || ext === '.docx' || ext === 'doc' || ext === 'docx') return 'is-word'
   return 'is-file'
 }
@@ -152,6 +156,18 @@ const openDocPreview = (doc) => {
   background: #edf4ff;
   border-color: #d8e6ff;
   color: #3f79f3;
+}
+
+.simple-item-type-tag.is-ppt {
+  background: #fff4eb;
+  border-color: #ffe1c8;
+  color: #e5852c;
+}
+
+.simple-item-type-tag.is-md {
+  background: #eff9ef;
+  border-color: #d4edd4;
+  color: #2f8c4c;
 }
 
 .simple-item-type-tag.is-file {

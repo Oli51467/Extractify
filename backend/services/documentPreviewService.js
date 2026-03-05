@@ -6,7 +6,8 @@ const config = require('../config');
 const { normalizeUploadedFilename } = require('../utils/filename');
 
 const PREVIEW_ROOT = path.join(config.paths.tempRoot, 'document_previews');
-const WORD_EXTENSIONS = new Set(['.doc', '.docx']);
+const OFFICE_CONVERTIBLE_EXTENSIONS = new Set(['.doc', '.docx', '.ppt', '.pptx']);
+const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
 
 const SOFFICE_CANDIDATES = [
   config.tools.sofficePath,
@@ -20,7 +21,11 @@ const SOFFICE_CANDIDATES = [
 const MIME_MAP = {
   '.pdf': 'application/pdf',
   '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.md': 'text/markdown; charset=utf-8',
+  '.markdown': 'text/markdown; charset=utf-8'
 };
 
 const normalizePathForCompare = (value = '') => path.resolve(value).replace(/\\/g, '/');
@@ -128,11 +133,11 @@ const buildPreviewCacheKey = (absolutePath, stats) => {
   return crypto.createHash('sha1').update(payload).digest('hex');
 };
 
-const convertWordToPdf = async (absolutePath, stats) => {
+const convertOfficeToPdf = async (absolutePath, stats) => {
   const sofficeBinary = await resolveSofficeBinary();
   if (!sofficeBinary) {
     throw asUserError(
-      '当前环境缺少 LibreOffice（soffice），暂时无法在线预览 Word 文档',
+      '当前环境缺少 LibreOffice（soffice），暂时无法在线预览 Office 文档',
       'PREVIEW_TOOL_MISSING',
       503
     );
@@ -170,7 +175,7 @@ const convertWordToPdf = async (absolutePath, stats) => {
   }
 
   if (!fs.existsSync(cachedPdfPath)) {
-    throw asUserError('Word 文档预览转换失败', 'PREVIEW_CONVERT_FAILED', 500);
+    throw asUserError('Office 文档预览转换失败', 'PREVIEW_CONVERT_FAILED', 500);
   }
 
   return cachedPdfPath;
@@ -188,11 +193,19 @@ const resolveDocumentPreview = async (document = {}) => {
     };
   }
 
-  if (!WORD_EXTENSIONS.has(ext)) {
+  if (MARKDOWN_EXTENSIONS.has(ext)) {
+    return {
+      filePath: absolutePath,
+      mimeType: resolveMimeType(ext),
+      fileName: buildPreviewFileName(document, ext)
+    };
+  }
+
+  if (!OFFICE_CONVERTIBLE_EXTENSIONS.has(ext)) {
     throw asUserError('当前文档类型暂不支持在线预览', 'PREVIEW_UNSUPPORTED_TYPE', 400);
   }
 
-  const previewPdfPath = await convertWordToPdf(absolutePath, stats);
+  const previewPdfPath = await convertOfficeToPdf(absolutePath, stats);
   return {
     filePath: previewPdfPath,
     mimeType: 'application/pdf',

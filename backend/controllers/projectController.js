@@ -187,6 +187,33 @@ const listProjectAssets = (req, res) => {
   }
 };
 
+const updateProjectAssetOcr = (req, res) => {
+  try {
+    const asset = projectService.updateAssetOcr(
+      req.sessionId,
+      req.params.projectId,
+      req.params.assetId,
+      {
+        ocrText: req.body?.ocrText || '',
+        ocrIndexed: Object.prototype.hasOwnProperty.call(req.body || {}, 'ocrIndexed')
+          ? Boolean(req.body.ocrIndexed)
+          : true
+      }
+    );
+
+    return res.json({
+      success: true,
+      asset
+    });
+  } catch (error) {
+    const statusCode = ['PROJECT_NOT_FOUND', 'ASSET_NOT_FOUND'].includes(error.code) ? 404 : 400;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || '更新素材 OCR 失败'
+    });
+  }
+};
+
 const listProjectBatches = (req, res) => {
   try {
     const batches = projectService.listBatchJobs(req.sessionId, req.params.projectId, req.query || {});
@@ -250,6 +277,7 @@ module.exports = {
   previewProjectDocument,
   listProjectRuns,
   listProjectAssets,
+  updateProjectAssetOcr,
   listProjectBatches,
   listBatchItems,
   listProjectAudit

@@ -20,6 +20,34 @@ const ensureDatabaseDir = () => {
 const initializeSchema = (dbInstance) => {
   const statements = [
     `
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      provider_user_id TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
+      email_verified INTEGER NOT NULL DEFAULT 0,
+      display_name TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT NOT NULL DEFAULT '',
+      profile_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (provider, provider_user_id)
+    )
+    `,
+    `CREATE INDEX IF NOT EXISTS idx_users_provider_uid ON users (provider, provider_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`,
+    `
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      session_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+    `CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions (user_id, updated_at DESC)`,
+    `
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
@@ -93,6 +121,7 @@ const initializeSchema = (dbInstance) => {
       deduped INTEGER NOT NULL DEFAULT 0,
       is_primary INTEGER NOT NULL DEFAULT 1,
       ocr_text TEXT NOT NULL DEFAULT '',
+      ocr_indexed INTEGER NOT NULL DEFAULT 0,
       source_context_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
@@ -215,6 +244,14 @@ const initializeSchema = (dbInstance) => {
       dbInstance.prepare(`
         ALTER TABLE assets
         ADD COLUMN ocr_text TEXT NOT NULL DEFAULT ''
+      `).run();
+    }
+
+    const hasAssetOcrIndexed = assetColumns.some((column) => column.name === 'ocr_indexed');
+    if (!hasAssetOcrIndexed) {
+      dbInstance.prepare(`
+        ALTER TABLE assets
+        ADD COLUMN ocr_indexed INTEGER NOT NULL DEFAULT 0
       `).run();
     }
   });

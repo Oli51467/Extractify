@@ -111,6 +111,47 @@ const toPublicUploadPath = (absolutePath) => {
 
 const HASH_WIDTH = 9;
 const HASH_HEIGHT = 8;
+const OFFICE_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.bmp',
+  '.tif',
+  '.tiff',
+  '.svg',
+  '.emf',
+  '.wmf'
+]);
+const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
+const MARKDOWN_REMOTE_TIMEOUT_MS = 20 * 1000;
+const IMAGE_MIME_TO_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+  'image/bmp': '.bmp',
+  'image/tiff': '.tiff',
+  'image/x-tiff': '.tiff',
+  'image/svg+xml': '.svg',
+  'image/x-emf': '.emf',
+  'image/x-wmf': '.wmf'
+};
+const IMAGE_EXT_TO_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.svg': 'image/svg+xml',
+  '.emf': 'image/x-emf',
+  '.wmf': 'image/x-wmf'
+};
 
 // 提取文档中的图片
 exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
@@ -143,17 +184,25 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
     if (originalExt === '.doc') {
       const convertReporter = createStageReporter(onProgress, 25, 10);
       sourcePath = await convertDocToDocx(inputFilePath, tempDir, convertReporter);
+    } else if (originalExt === '.ppt') {
+      const convertReporter = createStageReporter(onProgress, 25, 10);
+      sourcePath = await convertPptToPptx(inputFilePath, tempDir, convertReporter);
     }
 
     const fileExt = path.extname(sourcePath).toLowerCase();
     let images = [];
 
+    const extractReporter = createStageReporter(onProgress, 35, 50);
     if (fileExt === '.pdf') {
-      const extractReporter = createStageReporter(onProgress, 35, 50);
       images = await extractImagesFromPdf(sourcePath, outputDir, extractReporter);
-    } else {
-      const extractReporter = createStageReporter(onProgress, 35, 50);
+    } else if (fileExt === '.docx') {
       images = await extractImagesFromDocx(sourcePath, outputDir, extractReporter);
+    } else if (fileExt === '.pptx') {
+      images = await extractImagesFromPptx(sourcePath, outputDir, extractReporter);
+    } else if (MARKDOWN_EXTENSIONS.has(fileExt)) {
+      images = await extractImagesFromMarkdown(sourcePath, outputDir, extractReporter);
+    } else {
+      throw new Error('暂不支持当前文档类型');
     }
 
     let dedupeSummary = {
@@ -268,6 +317,7 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
         width: image.width,
         height: image.height,
         size: image.size,
+        ocrIndexed: Boolean(image.ocrIndexed),
         ocrText: image.ocrText || ''
       }))
     };
@@ -301,23 +351,29 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
   }
 };
 
-async function convertDocToDocx(docPath, tempDir, reportStageProgress) {
-  reportStageProgress(5, '检测 .doc 转换环境...');
+async function convertLegacyOfficeToOpenXml(filePath, tempDir, options = {}, reportStageProgress) {
+  const sourceExt = String(options.sourceExt || '').toLowerCase();
+  const targetExt = String(options.targetExt || '').toLowerCase();
+  const sourceLabel = String(options.sourceLabel || sourceExt || '文件');
+  const targetLabel = String(options.targetLabel || targetExt || '目标格式');
+  const convertToken = String(targetExt || '').replace(/^\./, '') || 'docx';
+
+  reportStageProgress(5, `检测 ${sourceLabel} 转换环境...`);
 
   const sofficeBinary = resolveSofficeBinary();
   if (!sofficeBinary) {
-    throw new Error('当前环境未安装 LibreOffice（soffice），无法处理 .doc 文件。请安装 LibreOffice 后重试。');
+    throw new Error(`当前环境未安装 LibreOffice（soffice），无法处理 ${sourceLabel} 文件。请安装 LibreOffice 后重试。`);
   }
 
-  const outputDir = path.join(tempDir, 'doc_convert');
+  const outputDir = path.join(tempDir, `${convertToken}_convert`);
   await fs.promises.mkdir(outputDir, { recursive: true });
 
-  reportStageProgress(20, '正在将 .doc 转换为 .docx...');
+  reportStageProgress(20, `正在将 ${sourceLabel} 转换为 ${targetLabel}...`);
 
   try {
     await runCommand(
       sofficeBinary,
-      ['--headless', '--convert-to', 'docx', '--outdir', outputDir, docPath],
+      ['--headless', '--convert-to', convertToken, '--outdir', outputDir, filePath],
       { timeoutMs: 2 * 60 * 1000 }
     );
   } catch (error) {
@@ -327,21 +383,39 @@ async function convertDocToDocx(docPath, tempDir, reportStageProgress) {
     throw error;
   }
 
-  const expectedName = `${path.basename(docPath, path.extname(docPath))}.docx`;
+  const expectedName = `${path.basename(filePath, path.extname(filePath))}${targetExt}`;
   const expectedPath = path.join(outputDir, expectedName);
 
   let convertedPath = expectedPath;
   if (!fs.existsSync(expectedPath)) {
     const files = await fs.promises.readdir(outputDir);
-    const fallbackName = files.find(file => file.toLowerCase().endsWith('.docx'));
+    const fallbackName = files.find((file) => file.toLowerCase().endsWith(targetExt));
     if (!fallbackName) {
-      throw new Error('.doc 转换失败，未找到转换后的 .docx 文件');
+      throw new Error(`${sourceLabel} 转换失败，未找到转换后的 ${targetLabel} 文件`);
     }
     convertedPath = path.join(outputDir, fallbackName);
   }
 
-  reportStageProgress(100, '.doc 转换成功');
+  reportStageProgress(100, `${sourceLabel} 转换成功`);
   return convertedPath;
+}
+
+async function convertDocToDocx(docPath, tempDir, reportStageProgress) {
+  return convertLegacyOfficeToOpenXml(docPath, tempDir, {
+    sourceExt: '.doc',
+    targetExt: '.docx',
+    sourceLabel: '.doc',
+    targetLabel: '.docx'
+  }, reportStageProgress);
+}
+
+async function convertPptToPptx(pptPath, tempDir, reportStageProgress) {
+  return convertLegacyOfficeToOpenXml(pptPath, tempDir, {
+    sourceExt: '.ppt',
+    targetExt: '.pptx',
+    sourceLabel: '.ppt',
+    targetLabel: '.pptx'
+  }, reportStageProgress);
 }
 
 function resolveSofficeBinary() {
@@ -586,6 +660,7 @@ async function buildImageOcrIndex(images, outputDir, reportStageProgress) {
 
     if (text) indexedCount += 1;
     image.ocrText = text;
+    image.ocrIndexed = true;
 
     const stage = Math.round(((index + 1) / images.length) * 100);
     reportStageProgress(stage, `正在 OCR 识别 (${index + 1}/${images.length})`);
@@ -607,45 +682,442 @@ async function buildImageOcrIndex(images, outputDir, reportStageProgress) {
   };
 }
 
-// 从Word文档中提取图片
-async function extractImagesFromDocx(docxPath, outputDir, reportStageProgress) {
+const normalizeMimeType = (value = '') => String(value || '')
+  .split(';')[0]
+  .trim()
+  .toLowerCase();
+
+const tryDecodeUriComponent = (value = '') => {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    return value;
+  }
+};
+
+const parseMarkdownLinkTarget = (rawTarget = '') => {
+  const value = String(rawTarget || '').trim();
+  if (!value) return '';
+
+  if (value.startsWith('<')) {
+    const end = value.indexOf('>');
+    if (end > 1) {
+      return value.slice(1, end).trim();
+    }
+  }
+
+  const firstToken = value.split(/\s+/)[0];
+  return firstToken.replace(/^['"]|['"]$/g, '').trim();
+};
+
+const extractMarkdownImageTargets = (markdownText = '') => {
+  const targets = [];
+  const pushTarget = (raw) => {
+    const parsed = parseMarkdownLinkTarget(raw);
+    if (parsed) targets.push(parsed);
+  };
+
+  const inlineImageRegex = /!\[[^\]]*]\(([^)]+)\)/g;
+  let inlineMatch;
+  while ((inlineMatch = inlineImageRegex.exec(markdownText))) {
+    pushTarget(inlineMatch[1]);
+  }
+
+  const referenceMap = new Map();
+  const referenceDefRegex = /^\s{0,3}\[([^\]]+)]\s*:\s*(.+)$/gm;
+  let referenceDefMatch;
+  while ((referenceDefMatch = referenceDefRegex.exec(markdownText))) {
+    const key = String(referenceDefMatch[1] || '').trim().toLowerCase();
+    const target = parseMarkdownLinkTarget(referenceDefMatch[2] || '');
+    if (key && target) {
+      referenceMap.set(key, target);
+    }
+  }
+
+  const referenceImageRegex = /!\[([^\]]*)]\[([^\]]*)]/g;
+  let referenceImageMatch;
+  while ((referenceImageMatch = referenceImageRegex.exec(markdownText))) {
+    const fallbackKey = String(referenceImageMatch[1] || '').trim().toLowerCase();
+    const explicitKey = String(referenceImageMatch[2] || '').trim().toLowerCase();
+    const key = explicitKey || fallbackKey;
+    if (!key) continue;
+    const target = referenceMap.get(key);
+    if (target) targets.push(target);
+  }
+
+  const htmlImageRegex = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
+  let htmlImageMatch;
+  while ((htmlImageMatch = htmlImageRegex.exec(markdownText))) {
+    pushTarget(htmlImageMatch[1]);
+  }
+
+  const dedupedTargets = [];
+  const seen = new Set();
+  targets.forEach((target) => {
+    const key = String(target || '').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    dedupedTargets.push(key);
+  });
+
+  return dedupedTargets;
+};
+
+const isPathInsideRoot = (targetPath, rootPath) => {
+  const target = path.resolve(String(targetPath || ''));
+  const root = path.resolve(String(rootPath || ''));
+  return target === root || target.startsWith(`${root}${path.sep}`);
+};
+
+const resolveImageExtension = (source = '', mimeType = '') => {
+  const normalizedMime = normalizeMimeType(mimeType);
+  if (IMAGE_MIME_TO_EXT[normalizedMime]) {
+    return IMAGE_MIME_TO_EXT[normalizedMime];
+  }
+
+  const sourcePath = String(source || '').split('#')[0].split('?')[0];
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (OFFICE_IMAGE_EXTENSIONS.has(ext)) {
+    return ext;
+  }
+
+  return '.png';
+};
+
+const loadImageFromDataUri = (target) => {
+  const match = String(target || '').match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/i);
+  if (!match) return null;
+
+  const mimeType = normalizeMimeType(match[1] || '');
+  const isBase64 = Boolean(match[2]);
+  const payload = String(match[3] || '');
+
+  let buffer = Buffer.alloc(0);
+  if (isBase64) {
+    buffer = Buffer.from(payload.replace(/\s/g, ''), 'base64');
+  } else {
+    buffer = Buffer.from(tryDecodeUriComponent(payload), 'utf8');
+  }
+
+  if (!buffer.length) return null;
+  return {
+    buffer,
+    mimeType
+  };
+};
+
+const loadImageFromRemoteUrl = async (target) => {
+  if (typeof fetch !== 'function') {
+    throw new Error('当前运行环境不支持远程图片下载');
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, MARKDOWN_REMOTE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(target, {
+      method: 'GET',
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (!buffer.length) return null;
+
+    return {
+      buffer,
+      mimeType: normalizeMimeType(response.headers.get('content-type') || '')
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const resolveLocalMarkdownImagePath = (markdownPath, target) => {
+  const normalizedTarget = String(target || '').trim();
+  if (!normalizedTarget) return '';
+
+  const withoutQuery = normalizedTarget.split('#')[0].split('?')[0];
+  const decoded = tryDecodeUriComponent(withoutQuery);
+
+  if (decoded.startsWith('/uploads/')) {
+    return path.resolve(config.paths.uploadRoot, decoded.replace(/^\/uploads\//, ''));
+  }
+
+  return path.resolve(path.dirname(markdownPath), decoded);
+};
+
+const loadImageFromLocalPath = async (markdownPath, target) => {
+  const localPath = resolveLocalMarkdownImagePath(markdownPath, target);
+  if (!localPath) return null;
+  if (!isPathInsideRoot(localPath, config.paths.uploadRoot)) return null;
+
+  const stats = await fs.promises.stat(localPath).catch(() => null);
+  if (!stats || !stats.isFile()) return null;
+
+  const buffer = await fs.promises.readFile(localPath);
+  if (!buffer.length) return null;
+
+  return {
+    buffer,
+    mimeType: normalizeMimeType(IMAGE_EXT_TO_MIME[path.extname(localPath).toLowerCase()] || '')
+  };
+};
+
+const resolveMarkdownImageBuffer = async (markdownPath, target) => {
+  if (!target) return null;
+  if (/^data:/i.test(target)) {
+    return loadImageFromDataUri(target);
+  }
+
+  if (/^https?:\/\//i.test(target)) {
+    return loadImageFromRemoteUrl(target);
+  }
+
+  return loadImageFromLocalPath(markdownPath, target);
+};
+
+async function extractImagesFromMarkdown(markdownPath, outputDir, reportStageProgress) {
+  try {
+    const markdownText = await fs.promises.readFile(markdownPath, 'utf8');
+    const targets = extractMarkdownImageTargets(markdownText);
+
+    if (targets.length === 0) {
+      reportStageProgress(100, 'Markdown 文档中未找到图片引用');
+      return [];
+    }
+
+    const images = [];
+    for (let index = 0; index < targets.length; index++) {
+      const target = targets[index];
+      try {
+        const loaded = await resolveMarkdownImageBuffer(markdownPath, target);
+        if (!loaded || !loaded.buffer || loaded.buffer.length === 0) {
+          throw new Error('图片内容为空或不可访问');
+        }
+
+        const imageIndex = images.length + 1;
+        const ext = resolveImageExtension(target, loaded.mimeType);
+        const fileName = `image_1_${imageIndex}_${Date.now()}${ext}`;
+        const outputPath = path.join(outputDir, fileName);
+
+        await fs.promises.writeFile(outputPath, loaded.buffer);
+        const stats = await fs.promises.stat(outputPath);
+
+        images.push({
+          id: imageIndex,
+          name: fileName,
+          path: toPublicUploadPath(outputPath),
+          size: stats.size,
+          width: null,
+          height: null,
+          page: 1
+        });
+      } catch (error) {
+        console.error(`提取 Markdown 图片失败: ${target}`, error);
+      }
+
+      const stage = Math.round(((index + 1) / targets.length) * 100);
+      reportStageProgress(stage, `正在提取 Markdown 图片 (${index + 1}/${targets.length})`);
+    }
+
+    if (images.length > 0) {
+      reportStageProgress(100, `Markdown 图片提取完成，共 ${images.length} 张`);
+    } else {
+      reportStageProgress(100, 'Markdown 图片提取完成，未获取到可用图片');
+    }
+
+    return images;
+  } catch (error) {
+    console.error('从 Markdown 文档提取图片失败:', error);
+    reportStageProgress(100, 'Markdown 文档解析失败');
+    return [];
+  }
+}
+
+const isOfficeMediaImageFile = (fileName = '') => {
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  return OFFICE_IMAGE_EXTENSIONS.has(ext);
+};
+
+const listOfficeMediaFiles = async (mediaDir) => {
+  const files = await fs.promises.readdir(mediaDir);
+  const mediaFiles = [];
+
+  for (const file of files) {
+    if (!isOfficeMediaImageFile(file)) continue;
+
+    const filePath = path.join(mediaDir, file);
+    const stats = await fs.promises.stat(filePath);
+    if (!stats.isFile()) continue;
+
+    mediaFiles.push({ file, filePath, stats });
+  }
+
+  mediaFiles.sort((left, right) => left.file.localeCompare(right.file, undefined, { numeric: true, sensitivity: 'base' }));
+  return mediaFiles;
+};
+
+const readXmlAttribute = (xmlTag = '', attrName = '') => {
+  const escaped = String(attrName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!escaped) return '';
+  const match = String(xmlTag || '').match(new RegExp(`\\b${escaped}\\s*=\\s*(['"])(.*?)\\1`, 'i'));
+  return match ? String(match[2] || '').trim() : '';
+};
+
+const parseOpenXmlRelationships = (xmlText = '') => {
+  const list = [];
+  const relRegex = /<Relationship\b[^>]*>/gi;
+  let match;
+
+  while ((match = relRegex.exec(String(xmlText || '')))) {
+    const xmlTag = match[0];
+    const target = readXmlAttribute(xmlTag, 'Target');
+    if (!target) continue;
+
+    list.push({
+      id: readXmlAttribute(xmlTag, 'Id'),
+      type: readXmlAttribute(xmlTag, 'Type'),
+      target
+    });
+  }
+
+  return list;
+};
+
+const getOfficeMediaBaseName = (target = '') => {
+  const cleaned = String(target || '').trim().split('#')[0].split('?')[0];
+  if (!cleaned || /^[a-z]+:/i.test(cleaned)) return '';
+
+  const decoded = tryDecodeUriComponent(cleaned).replace(/\\/g, '/');
+  const baseName = path.posix.basename(decoded);
+  if (!baseName || !isOfficeMediaImageFile(baseName)) return '';
+  return baseName.toLowerCase();
+};
+
+const parsePptSlideNumber = (fileName = '') => {
+  const match = String(fileName || '').match(/^slide(\d+)\.xml$/i);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+};
+
+const buildPptxExtractionContext = async (tempDir) => {
+  const slidesDir = path.join(tempDir, 'ppt', 'slides');
+  const relsDir = path.join(slidesDir, '_rels');
+  const context = {
+    mediaSlideMap: new Map()
+  };
+
+  if (!fs.existsSync(slidesDir) || !fs.existsSync(relsDir)) {
+    return context;
+  }
+
+  const slideFiles = (await fs.promises.readdir(slidesDir))
+    .filter((fileName) => /^slide\d+\.xml$/i.test(fileName))
+    .sort((left, right) => {
+      const leftNum = parsePptSlideNumber(left) || 0;
+      const rightNum = parsePptSlideNumber(right) || 0;
+      return leftNum - rightNum;
+    });
+
+  for (const slideFile of slideFiles) {
+    const slideNumber = parsePptSlideNumber(slideFile);
+    if (!slideNumber) continue;
+
+    const relsPath = path.join(relsDir, `${slideFile}.rels`);
+    if (!fs.existsSync(relsPath)) continue;
+
+    const relsContent = await fs.promises.readFile(relsPath, 'utf8').catch(() => '');
+    if (!relsContent) continue;
+
+    const relationships = parseOpenXmlRelationships(relsContent);
+    relationships.forEach((relationship) => {
+      const relationType = String(relationship.type || '').toLowerCase();
+      if (!relationType.includes('/image')) return;
+
+      const mediaName = getOfficeMediaBaseName(relationship.target);
+      if (!mediaName) return;
+      if (!context.mediaSlideMap.has(mediaName)) {
+        context.mediaSlideMap.set(mediaName, slideNumber);
+      }
+    });
+  }
+
+  return context;
+};
+
+const resolvePptxImagePageNumber = (mediaItem, imageIndex, context) => {
+  const mediaName = String(mediaItem?.file || '').trim().toLowerCase();
+  if (!mediaName) return 1;
+  if (!context || !(context.mediaSlideMap instanceof Map)) return 1;
+
+  const mappedPage = Number(context.mediaSlideMap.get(mediaName));
+  if (Number.isFinite(mappedPage) && mappedPage > 0) {
+    return Math.round(mappedPage);
+  }
+
+  return 1;
+};
+
+async function extractImagesFromOpenXmlPackage(openXmlPath, outputDir, reportStageProgress, options = {}) {
+  const packageLabel = String(options.packageLabel || '文档');
+  const mediaPathSegments = Array.isArray(options.mediaPathSegments) ? options.mediaPathSegments : [];
+  const resolvePageNumber = typeof options.resolvePageNumber === 'function'
+    ? options.resolvePageNumber
+    : null;
+  const buildContext = typeof options.buildContext === 'function'
+    ? options.buildContext
+    : null;
   const images = [];
   const tempDir = path.join(path.dirname(outputDir), `temp_${uuid()}`);
 
   try {
     await fs.promises.mkdir(tempDir, { recursive: true });
-    reportStageProgress(5, '正在解压 Word 文档...');
+    reportStageProgress(5, `正在解压 ${packageLabel} 文档...`);
 
-    const zip = new AdmZip(docxPath);
+    const zip = new AdmZip(openXmlPath);
     zip.extractAllTo(tempDir, true);
 
-    const mediaDir = path.join(tempDir, 'word', 'media');
+    const mediaDir = path.join(tempDir, ...mediaPathSegments);
     if (!fs.existsSync(mediaDir)) {
-      reportStageProgress(100, 'Word 文档中未找到媒体资源');
+      reportStageProgress(100, `${packageLabel} 文档中未找到媒体资源`);
       return [];
     }
 
-    const files = await fs.promises.readdir(mediaDir);
-    const mediaFiles = [];
+    const mediaFiles = await listOfficeMediaFiles(mediaDir);
 
-    for (const file of files) {
-      const filePath = path.join(mediaDir, file);
-      const stats = await fs.promises.stat(filePath);
-      if (stats.isFile()) {
-        mediaFiles.push({ file, filePath, stats });
+    if (mediaFiles.length === 0) {
+      reportStageProgress(100, `${packageLabel} 文档中未找到可提取图片`);
+      return [];
+    }
+
+    let extractionContext = null;
+    if (buildContext) {
+      try {
+        extractionContext = await buildContext(tempDir);
+      } catch (error) {
+        console.error(`构建 ${packageLabel} 定位上下文失败:`, error);
       }
     }
 
-    if (mediaFiles.length === 0) {
-      reportStageProgress(100, 'Word 文档中未找到可提取图片');
-      return [];
-    }
-
-    const pageNum = 1;
     for (let index = 0; index < mediaFiles.length; index++) {
       const item = mediaFiles[index];
       const ext = path.extname(item.file).replace('.', '').toLowerCase() || 'bin';
       const imageIndex = index + 1;
+
+      const resolvedPage = resolvePageNumber
+        ? Number(resolvePageNumber(item, imageIndex, extractionContext))
+        : 1;
+      const pageNum = Number.isFinite(resolvedPage) && resolvedPage > 0
+        ? Math.round(resolvedPage)
+        : 1;
       const fileName = `image_${pageNum}_${imageIndex}_${Date.now()}.${ext}`;
       const outputPath = path.join(outputDir, fileName);
 
@@ -662,20 +1134,38 @@ async function extractImagesFromDocx(docxPath, outputDir, reportStageProgress) {
       });
 
       const stage = Math.round((imageIndex / mediaFiles.length) * 100);
-      reportStageProgress(stage, `正在提取 Word 图片 (${imageIndex}/${mediaFiles.length})`);
+      reportStageProgress(stage, `正在提取 ${packageLabel} 图片 (${imageIndex}/${mediaFiles.length})`);
     }
 
     return images;
   } catch (error) {
-    console.error('从Word文档提取图片失败:', error);
+    console.error(`从${packageLabel}文档提取图片失败:`, error);
     return [];
   } finally {
     try {
       await fs.promises.rm(tempDir, { recursive: true, force: true });
     } catch (cleanupError) {
-      console.error('清理Word临时目录失败:', cleanupError);
+      console.error(`清理${packageLabel}临时目录失败:`, cleanupError);
     }
   }
+}
+
+// 从 Word 文档中提取图片
+async function extractImagesFromDocx(docxPath, outputDir, reportStageProgress) {
+  return extractImagesFromOpenXmlPackage(docxPath, outputDir, reportStageProgress, {
+    packageLabel: 'Word',
+    mediaPathSegments: ['word', 'media']
+  });
+}
+
+// 从 PowerPoint 文档中提取图片
+async function extractImagesFromPptx(pptxPath, outputDir, reportStageProgress) {
+  return extractImagesFromOpenXmlPackage(pptxPath, outputDir, reportStageProgress, {
+    packageLabel: 'PowerPoint',
+    mediaPathSegments: ['ppt', 'media'],
+    buildContext: buildPptxExtractionContext,
+    resolvePageNumber: resolvePptxImagePageNumber
+  });
 }
 
 const toSafeNumber = (value) => {

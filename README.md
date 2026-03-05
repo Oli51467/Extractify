@@ -1,17 +1,20 @@
 # Extractify - 文档图片提取工具
 
-Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提取图片。它提供了直观的用户界面，让您可以轻松上传文档，查看和下载提取的图片。
+Extractify是一个简单易用的工具，用于从Word、PowerPoint、Markdown文档和PDF文件中提取图片。它提供了直观的用户界面，让您可以轻松上传文档，查看和下载提取的图片。
 
 ## 功能特点
 
 - 支持从Word文档(.docx, .doc)中提取图片
+- 支持从PowerPoint文档(.pptx, .ppt)中提取图片
+- 支持从Markdown文档(.md, .markdown)中提取图片引用（本地/远程/data URI）
 - 支持从PDF文件中提取图片
 - 任务级多用户隔离（按 jobId 独立目录，互不覆盖）
-- 轻量会话隔离（无登录，按浏览器会话 Cookie 绑定任务访问权限）
+- 支持 Google / GitHub OAuth 登录（可选启用）
+- 轻量会话隔离（按浏览器会话 Cookie 绑定任务访问权限）
 - 实时显示上传和后端处理进度（基于真实任务状态）
 - 图片预览和搜索功能
 - 支持下载单个图片或所有图片的压缩包
-- 支持通过 LibreOffice 将 .doc 自动转换为 .docx 后提取
+- 支持通过 LibreOffice 将 .doc 自动转换为 .docx、将 .ppt 自动转换为 .pptx 后提取
 - 响应式设计，适配各种设备
 
 ## 技术栈
@@ -174,6 +177,13 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
    JOB_QUEUE_CONCURRENCY=2
    JOB_RETENTION_HOURS=72
    SESSION_COOKIE_SECURE=true
+   AUTH_ENABLED=true
+   AUTH_FRONTEND_BASE_URL=https://your-domain.com
+   AUTH_BACKEND_BASE_URL=https://api.your-domain.com
+   GOOGLE_CLIENT_ID=
+   GOOGLE_CLIENT_SECRET=
+   GITHUB_CLIENT_ID=
+   GITHUB_CLIENT_SECRET=
    SOFFICE_PATH=/usr/bin/soffice
    EOL
    ```
@@ -312,7 +322,7 @@ Extractify是一个简单易用的工具，用于从Word文档和PDF文件中提
 ## 注意事项
 
 - 上传文件大小限制为50MB
-- 支持的文件格式：.docx, .doc, .pdf
+- 支持的文件格式：.docx, .doc, .pptx, .ppt, .pdf, .md, .markdown
 - 提取的图片将保存在服务器上3天，之后自动删除
 
 ## 许可证

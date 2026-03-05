@@ -50,6 +50,7 @@
 
           <AssetsTab
             v-else-if="activeTab === 'assets'"
+            :project-id="selectedProject.id"
             :gallery-images="galleryImages"
             :zip-urls="zipUrls"
           />

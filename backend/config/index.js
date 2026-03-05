@@ -12,6 +12,14 @@ const toNumber = (value, fallback, min = Number.NEGATIVE_INFINITY) => {
   return parsed >= min ? parsed : fallback;
 };
 
+const toBoolean = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
+
 const parseOrigins = (rawOrigins) => {
   if (!rawOrigins) return ['http://localhost:*', 'http://127.0.0.1:*'];
   if (rawOrigins.trim() === '*') return ['*'];
@@ -27,16 +35,31 @@ const resolvePathFromRoot = (targetPath, fallbackPath) => {
   return path.isAbsolute(value) ? value : path.resolve(ROOT_DIR, value);
 };
 
+const normalizeBaseUrl = (value, fallback) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return fallback;
+  return normalized.replace(/\/+$/, '');
+};
+
 const maxFileSizeMB = toNumber(
   process.env.MAX_FILE_SIZE_MB || process.env.MAX_FILE_SIZE,
   50,
   1
 );
 
+const serverPort = toNumber(process.env.PORT, 13434, 1);
+const googleClientId = String(process.env.GOOGLE_CLIENT_ID || '').trim();
+const googleClientSecret = String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
+const githubClientId = String(process.env.GITHUB_CLIENT_ID || '').trim();
+const githubClientSecret = String(process.env.GITHUB_CLIENT_SECRET || '').trim();
+const googleOAuthEnabled = Boolean(googleClientId && googleClientSecret);
+const githubOAuthEnabled = Boolean(githubClientId && githubClientSecret);
+const authEnabledFallback = googleOAuthEnabled || githubOAuthEnabled;
+
 const config = {
   rootDir: ROOT_DIR,
   server: {
-    port: toNumber(process.env.PORT, 13434, 1),
+    port: serverPort,
     requestTimeoutMs: toNumber(process.env.REQUEST_TIMEOUT_MS, 5 * 60 * 1000, 1000)
   },
   security: {
@@ -52,6 +75,22 @@ const config = {
     cookieMaxAgeMs: toNumber(process.env.SESSION_COOKIE_MAX_AGE_HOURS, 24 * 7, 1) * 60 * 60 * 1000,
     cookieSameSite: (process.env.SESSION_COOKIE_SAME_SITE || 'lax').toLowerCase(),
     cookieSecure: process.env.SESSION_COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production'
+  },
+  auth: {
+    enabled: toBoolean(process.env.AUTH_ENABLED, authEnabledFallback),
+    frontendBaseUrl: normalizeBaseUrl(process.env.AUTH_FRONTEND_BASE_URL, 'http://localhost:5173'),
+    backendBaseUrl: normalizeBaseUrl(process.env.AUTH_BACKEND_BASE_URL, `http://localhost:${serverPort}`),
+    oauthStateTtlMs: toNumber(process.env.OAUTH_STATE_TTL_SECONDS, 600, 60) * 1000,
+    google: {
+      clientId: googleClientId,
+      clientSecret: googleClientSecret,
+      enabled: googleOAuthEnabled
+    },
+    github: {
+      clientId: githubClientId,
+      clientSecret: githubClientSecret,
+      enabled: githubOAuthEnabled
+    }
   },
   upload: {
     maxFileSizeMB,
@@ -82,6 +121,10 @@ const config = {
     file: resolvePathFromRoot(process.env.DB_FILE, path.join(ROOT_DIR, 'data', 'extractify.sqlite'))
   }
 };
+
+if (config.auth.enabled && !config.auth.google.enabled && !config.auth.github.enabled) {
+  config.auth.enabled = false;
+}
 
 config.paths = {
   uploadRoot: resolvePathFromRoot(process.env.UPLOAD_ROOT, path.join(ROOT_DIR, 'uploads')),

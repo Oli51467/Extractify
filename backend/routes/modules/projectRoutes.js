@@ -29,6 +29,7 @@ router.get(
 );
 router.get('/projects/:projectId/runs', ensureProjectAccess, projectController.listProjectRuns);
 router.get('/projects/:projectId/assets', ensureProjectAccess, projectController.listProjectAssets);
+router.patch('/projects/:projectId/assets/:assetId/ocr', ensureProjectAccess, projectController.updateProjectAssetOcr);
 router.get('/projects/:projectId/audit', ensureProjectAccess, projectController.listProjectAudit);
 
 router.post(

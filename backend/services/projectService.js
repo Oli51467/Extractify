@@ -88,12 +88,14 @@ const mapAssetRow = (row) => {
   if (!row) return null;
   const source = parseJson(row.source_context_json, {});
   const sourceName = normalizeUploadedFilename(source.sourceName, '');
+  const sourceFileType = String(source.fileType || '').trim().toLowerCase();
   return {
     id: row.id,
     projectId: row.project_id,
     runId: row.run_id,
     jobId: row.job_id,
     documentId: row.document_id,
+    fileType: sourceFileType,
     name: row.name,
     path: row.path,
     size: Number(row.size || 0),
@@ -103,9 +105,11 @@ const mapAssetRow = (row) => {
     deduped: Number(row.deduped || 0) === 1,
     isPrimary: Number(row.is_primary || 0) === 1,
     ocrText: String(row.ocr_text || '').trim(),
+    ocrIndexed: Number(row.ocr_indexed || 0) === 1,
     sourceContext: {
       ...source,
-      sourceName
+      sourceName,
+      fileType: sourceFileType
     },
     createdAt: row.created_at
   };
@@ -603,8 +607,8 @@ const replaceRunAssets = (sessionId, projectId, runId, payload = {}) => {
     const insertStmt = db.prepare(`
       INSERT INTO assets (
         id, project_id, session_id, run_id, job_id, document_id, name, path, size, width, height, page,
-        deduped, is_primary, ocr_text, source_context_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        deduped, is_primary, ocr_text, ocr_indexed, source_context_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const now = nowIso();
@@ -626,11 +630,13 @@ const replaceRunAssets = (sessionId, projectId, runId, payload = {}) => {
         Number(image.deduped ? 1 : 0),
         Number(image.isPrimary === false ? 0 : 1),
         sanitizeText(image.ocrText, 12000, ''),
+        Number(image.ocrIndexed ? 1 : 0),
         toJson({
           sourceName: normalizeUploadedFilename(payload.sourceName || run.sourceName || '', ''),
           page: image.page == null ? null : Number(image.page),
           runId,
-          documentId: payload.documentId || run.documentId || ''
+          documentId: payload.documentId || run.documentId || '',
+          fileType: sanitizeText(payload.fileType, 20, '').toLowerCase()
         }),
         now
       );
@@ -682,6 +688,47 @@ const listAssetsByRun = (sessionId, projectId, runId) => {
     ORDER BY created_at DESC
   `).all(runId, projectId, sessionId);
   return rows.map(mapAssetRow);
+};
+
+const getAssetById = (sessionId, projectId, assetId) => {
+  if (!assetId) return null;
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT *
+    FROM assets
+    WHERE id = ? AND project_id = ? AND session_id = ?
+    LIMIT 1
+  `).get(assetId, projectId, sessionId);
+  return mapAssetRow(row);
+};
+
+const updateAssetOcr = (sessionId, projectId, assetId, patch = {}) => {
+  assertProjectOwnedBySession(sessionId, projectId);
+  const current = getAssetById(sessionId, projectId, assetId);
+  if (!current) {
+    const error = new Error('素材不存在');
+    error.code = 'ASSET_NOT_FOUND';
+    throw error;
+  }
+
+  const db = getDb();
+  const nextOcrText = sanitizeText(
+    Object.prototype.hasOwnProperty.call(patch, 'ocrText') ? patch.ocrText : current.ocrText,
+    12000,
+    ''
+  );
+  const nextOcrIndexed = Object.prototype.hasOwnProperty.call(patch, 'ocrIndexed')
+    ? Number(patch.ocrIndexed ? 1 : 0)
+    : Number(current.ocrIndexed ? 1 : 0);
+
+  db.prepare(`
+    UPDATE assets
+    SET ocr_text = ?, ocr_indexed = ?
+    WHERE id = ? AND project_id = ? AND session_id = ?
+  `).run(nextOcrText, nextOcrIndexed, assetId, projectId, sessionId);
+
+  touchProject(projectId);
+  return getAssetById(sessionId, projectId, assetId);
 };
 
 const createBatchJob = (sessionId, projectId, payload = {}) => {
@@ -1053,6 +1100,7 @@ module.exports = {
   replaceRunAssets,
   listAssets,
   listAssetsByRun,
+  updateAssetOcr,
   createBatchJob,
   getBatchJob,
   updateBatchJob,

@@ -29,17 +29,24 @@ const fileFilter = (req, file, cb) => {
   const allowedTypes = [
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/msword',
-    'application/pdf'
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.ms-powerpoint',
+    'application/mspowerpoint',
+    'application/powerpoint',
+    'application/pdf',
+    'text/markdown',
+    'text/x-markdown',
+    'text/plain'
   ];
   const ext = path.extname(file.originalname || '').toLowerCase();
-  const allowedExts = ['.docx', '.doc', '.pdf'];
+  const allowedExts = ['.docx', '.doc', '.pptx', '.ppt', '.pdf', '.md', '.markdown'];
 
   if (allowedTypes.includes(file.mimetype) || allowedExts.includes(ext)) {
     cb(null, true);
     return;
   }
 
-  cb(new Error('不支持的文件类型，仅支持 Word 文档和 PDF 文件'), false);
+  cb(new Error('不支持的文件类型，仅支持 Word、PowerPoint、Markdown 文档和 PDF 文件'), false);
 };
 
 const uploadOptions = {

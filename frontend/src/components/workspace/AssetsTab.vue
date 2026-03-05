@@ -4,7 +4,7 @@
       <template #header>
         <div class="panel-card-header">素材库（{{ galleryImages.length }}）</div>
       </template>
-      <ImageGallery :images="galleryImages" :zip-urls="zipUrls" />
+      <ImageGallery :images="galleryImages" :project-id="projectId" :zip-urls="zipUrls" />
     </AppCard>
   </div>
 </template>
@@ -14,6 +14,10 @@ import ImageGallery from '../ImageGallery.vue'
 import AppCard from '../ui/AppCard.vue'
 
 defineProps({
+  projectId: {
+    type: String,
+    default: ''
+  },
   galleryImages: {
     type: Array,
     default: () => []

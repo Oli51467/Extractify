@@ -1,9 +1,18 @@
 const jobService = require('../services/jobService');
 const projectService = require('../services/projectService');
+const config = require('../config');
+const authService = require('../services/authService');
 
 const normalizeUploadPath = (rawPath = '') => rawPath.replace(/\\/g, '/');
 
 const uploadAuthMiddleware = (req, res, next) => {
+  if (config.auth.enabled) {
+    const sessionUser = authService.getSessionUser(req.sessionId);
+    if (!sessionUser) {
+      return res.status(401).end();
+    }
+  }
+
   const pathName = normalizeUploadPath(req.path || '');
 
   if (pathName.startsWith('/jobs/')) {

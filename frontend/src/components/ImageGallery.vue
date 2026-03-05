@@ -4,11 +4,18 @@
       <div class="gallery-actions">
         <div v-if="zipUrls.length > 0" class="zip-actions">
           <select v-model.number="selectedZipIndex" class="zip-select">
+            <option :value="ALL_FILES_ZIP_INDEX">全部文件</option>
             <option v-for="(zip, index) in zipUrls" :key="zip.url || index" :value="index">
               {{ zip.name }} ({{ zip.count }}张)
             </option>
           </select>
-          <AppButton tone="primary" variant="outline" size="sm" @click="downloadSelectedZip">
+          <AppButton
+            tone="primary"
+            variant="outline"
+            size="sm"
+            :disabled="selectedZipIndex === ALL_FILES_ZIP_INDEX"
+            @click="downloadSelectedZip"
+          >
             <template #icon>
               <AppIcon name="download" />
             </template>
@@ -16,17 +23,6 @@
           </AppButton>
         </div>
 
-        <AppButton
-          tone="success"
-          :loading="ocrIndexing"
-          :disabled="images.length === 0"
-          @click="buildOcrIndex"
-        >
-          <template #icon>
-            <AppIcon name="search" />
-          </template>
-          {{ ocrButtonText }}
-        </AppButton>
       </div>
 
       <div class="gallery-filter">
@@ -42,7 +38,7 @@
       <AppProgress v-if="ocrIndexing" :percentage="ocrProgress" />
       <p>{{ ocrStatus }}</p>
       <p v-if="!ocrIndexing && pendingOcrCount > 0" class="ocr-hint">
-        还有 {{ pendingOcrCount }} 张图片未建立 OCR 索引，可继续补全。
+        还有 {{ pendingOcrCount }} 张图片未建立 OCR 索引，系统会自动补全。
       </p>
     </div>
 
@@ -50,10 +46,7 @@
       <div v-for="image in filteredImages" :key="image.id" class="image-card">
         <div class="image-container" @click="openPreview(image)" title="点击查看大图">
           <img :src="image.path" :alt="image.name" />
-        </div>
-        <div class="image-info">
-          <div class="info-top">
-            <span class="image-name">{{ image.name }}</span>
+          <div class="image-overlay-actions">
             <AppButton
               tone="primary"
               variant="ghost"
@@ -66,14 +59,23 @@
                 <AppIcon name="download" />
               </template>
             </AppButton>
+            <AppButton
+              v-if="canOpenSourceDocument(image)"
+              tone="primary"
+              variant="ghost"
+              size="sm"
+              shape="circle"
+              @click.stop="openSourceDocument(image)"
+              :title="getSourceButtonTitle(image)"
+            >
+              <template #icon>
+                <AppIcon name="external" />
+              </template>
+            </AppButton>
           </div>
-          <div class="info-meta">
-            <span class="image-size">{{ formatSize(image.size) }}</span>
-            <span v-if="image.source" class="image-source">{{ image.source }}</span>
-          </div>
-          <div v-if="getOcrPreview(image)" class="ocr-preview" :title="getIndexedText(image)">
-            OCR：{{ getOcrPreview(image) }}
-          </div>
+        </div>
+        <div v-if="shouldShowImageName" class="image-info">
+          <span class="image-name" :title="image.name">{{ image.name }}</span>
         </div>
       </div>
     </div>
@@ -93,6 +95,7 @@
 <script setup>
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { notify } from '../services/notify'
+import { updateProjectAssetOcr } from '../services/projectApi'
 import AppButton from './ui/AppButton.vue'
 import AppInput from './ui/AppInput.vue'
 import AppIcon from './ui/AppIcon.vue'
@@ -105,6 +108,10 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  projectId: {
+    type: String,
+    default: ''
+  },
   zipUrls: {
     type: Array,
     default: () => []
@@ -113,11 +120,13 @@ const props = defineProps({
 
 const OCR_PRIMARY_LANG = 'chi_sim+eng'
 const OCR_FALLBACK_LANG = 'eng'
+const OCR_CACHE_PREFIX = 'extractify:ocr-index:v1'
+const ALL_FILES_ZIP_INDEX = -1
 
 const searchQuery = ref('')
 const previewVisible = ref(false)
 const selectedImage = ref(null)
-const selectedZipIndex = ref(0)
+const selectedZipIndex = ref(ALL_FILES_ZIP_INDEX)
 
 const ocrIndexing = ref(false)
 const ocrProgress = ref(0)
@@ -131,35 +140,86 @@ const activeOcrMeta = ref({
 
 let tesseractModule = null
 let ocrWorker = null
+let autoOcrRerunQueued = false
 
-const getImageKey = (image) => `${image.id || image.name || 'image'}::${image.path || ''}`
+const resolveOcrCacheKey = () => `${OCR_CACHE_PREFIX}:${String(props.projectId || 'default')}`
+
+const normalizeOcrIndex = (value) => {
+  if (!value || typeof value !== 'object') return {}
+  const normalized = {}
+
+  for (const [key, text] of Object.entries(value)) {
+    normalized[String(key)] = String(text || '')
+  }
+
+  return normalized
+}
+
+const readOcrCache = (cacheKey) => {
+  if (typeof window === 'undefined' || !window.localStorage) return {}
+
+  try {
+    const raw = window.localStorage.getItem(cacheKey)
+    if (!raw) return {}
+    return normalizeOcrIndex(JSON.parse(raw))
+  } catch (error) {
+    console.warn('读取 OCR 缓存失败:', error)
+    return {}
+  }
+}
+
+const writeOcrCache = (cacheKey, indexMap) => {
+  if (typeof window === 'undefined' || !window.localStorage) return
+
+  try {
+    window.localStorage.setItem(cacheKey, JSON.stringify(normalizeOcrIndex(indexMap)))
+  } catch (error) {
+    console.warn('写入 OCR 缓存失败:', error)
+  }
+}
+
+const getImageKey = (image) => {
+  if (image?.id) return `asset:${image.id}`
+  return `${image?.name || 'image'}::${image?.path || ''}`
+}
 
 const hasOcrIndex = (image) => Object.prototype.hasOwnProperty.call(ocrIndex.value, getImageKey(image))
 
 const getIndexedText = (image) => ocrIndex.value[getImageKey(image)] || ''
 
-const getOcrPreview = (image) => {
-  const text = getIndexedText(image)
-  if (!text) return ''
-  return text.length > 42 ? `${text.slice(0, 42)}...` : text
-}
-
 const indexedImageCount = computed(() => props.images.filter((image) => hasOcrIndex(image)).length)
 
 const pendingOcrCount = computed(() => Math.max(props.images.length - indexedImageCount.value, 0))
 
-const ocrButtonText = computed(() => {
-  if (ocrIndexing.value) return 'OCR 建索引中'
-  if (indexedImageCount.value === 0) return 'OCR 建索引'
-  if (pendingOcrCount.value > 0) return `OCR 补全索引 (${pendingOcrCount.value})`
-  return 'OCR 重新识别'
+const activeZip = computed(() => {
+  if (selectedZipIndex.value === ALL_FILES_ZIP_INDEX) return null
+  return props.zipUrls[selectedZipIndex.value] || null
+})
+
+const shouldShowImageName = computed(() => selectedZipIndex.value === ALL_FILES_ZIP_INDEX)
+
+const scopedImages = computed(() => {
+  const selectedZip = activeZip.value
+  if (!selectedZip) return props.images
+
+  const targetRunId = String(selectedZip.runId || '').trim()
+  const targetJobId = String(selectedZip.jobId || '').trim()
+  if (!targetRunId && !targetJobId) return props.images
+
+  return props.images.filter((image) => {
+    const imageRunId = String(image?.runId || '').trim()
+    const imageJobId = String(image?.jobId || '').trim()
+    if (targetRunId && imageRunId === targetRunId) return true
+    if (targetJobId && imageJobId === targetJobId) return true
+    return false
+  })
 })
 
 const filteredImages = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
-  if (!query) return props.images
+  if (!query) return scopedImages.value
 
-  return props.images.filter((image) => {
+  return scopedImages.value.filter((image) => {
     const name = (image.name || '').toLowerCase()
     const source = (image.source || '').toLowerCase()
     const ocrText = getIndexedText(image).toLowerCase()
@@ -167,6 +227,25 @@ const filteredImages = computed(() => {
     return name.includes(query) || source.includes(query) || ocrText.includes(query)
   })
 })
+
+watch(
+  () => resolveOcrCacheKey(),
+  (cacheKey) => {
+    ocrIndex.value = readOcrCache(cacheKey)
+    ocrStatus.value = ''
+    ocrProgress.value = 0
+    autoOcrRerunQueued = false
+  },
+  { immediate: true }
+)
+
+watch(
+  ocrIndex,
+  (value) => {
+    writeOcrCache(resolveOcrCacheKey(), value)
+  },
+  { deep: true }
+)
 
 watch(
   () => props.images.map((image) => getImageKey(image)),
@@ -184,8 +263,15 @@ watch(
     props.images.forEach((image) => {
       const key = getImageKey(image)
       const backendText = String(image?.ocrText || '').trim()
-      if (!backendText) return
-      if (!Object.prototype.hasOwnProperty.call(nextIndex, key) || !String(nextIndex[key] || '').trim()) {
+      const backendIndexed = Boolean(image?.ocrIndexed) || Boolean(backendText)
+      if (!backendIndexed) return
+
+      if (!Object.prototype.hasOwnProperty.call(nextIndex, key)) {
+        nextIndex[key] = backendText
+        return
+      }
+
+      if (backendText && !String(nextIndex[key] || '').trim()) {
         nextIndex[key] = backendText
       }
     })
@@ -206,12 +292,12 @@ watch(
   () => props.zipUrls.length,
   (length) => {
     if (length === 0) {
-      selectedZipIndex.value = 0
+      selectedZipIndex.value = ALL_FILES_ZIP_INDEX
       return
     }
 
     if (selectedZipIndex.value > length - 1) {
-      selectedZipIndex.value = 0
+      selectedZipIndex.value = ALL_FILES_ZIP_INDEX
     }
   },
   { immediate: true }
@@ -275,26 +361,27 @@ const initWorker = async () => {
   }
 }
 
+const syncAssetOcrToBackend = async (image, text, indexed = true) => {
+  const projectId = String(props.projectId || '').trim()
+  const assetId = String(image?.id || '').trim()
+  if (!projectId || !assetId) return
+
+  try {
+    await updateProjectAssetOcr(projectId, assetId, {
+      ocrText: String(text || ''),
+      ocrIndexed: Boolean(indexed)
+    })
+  } catch (error) {
+    console.warn('同步 OCR 到后端失败:', assetId, error)
+  }
+}
+
 const buildOcrIndex = async () => {
   if (ocrIndexing.value) return
-  if (!props.images.length) {
-    notify.warning('暂无图片可建立 OCR 索引')
-    return
-  }
+  if (!props.images.length) return
 
-  const shouldReindexAll = indexedImageCount.value > 0 && pendingOcrCount.value === 0
-  const targets = shouldReindexAll
-    ? props.images
-    : props.images.filter((image) => !hasOcrIndex(image))
-
-  if (!targets.length) {
-    notify.success('OCR 索引已是最新')
-    return
-  }
-
-  if (shouldReindexAll) {
-    ocrIndex.value = {}
-  }
+  const targets = props.images.filter((image) => !hasOcrIndex(image))
+  if (!targets.length) return
 
   ocrIndexing.value = true
   ocrProgress.value = 0
@@ -319,10 +406,12 @@ const buildOcrIndex = async () => {
         const text = (result?.data?.text || '').replace(/\s+/g, ' ').trim()
 
         ocrIndex.value[getImageKey(image)] = text
+        await syncAssetOcrToBackend(image, text, true)
         successCount += 1
       } catch (error) {
         console.error('OCR 识别失败:', image?.name, error)
         ocrIndex.value[getImageKey(image)] = ''
+        await syncAssetOcrToBackend(image, '', true)
       }
 
       const stepProgress = ((index + 1) / total) * 100
@@ -332,7 +421,6 @@ const buildOcrIndex = async () => {
     }
 
     ocrStatus.value = `OCR 索引完成：${successCount}/${total} 张已处理，可直接搜索图片文字`
-    notify.success('OCR 建索引完成，可按图片中文字搜索')
   } catch (error) {
     console.error('OCR 建索引失败:', error)
     ocrStatus.value = `OCR 索引失败：${error.message || '请稍后重试'}`
@@ -343,14 +431,82 @@ const buildOcrIndex = async () => {
   }
 }
 
-const formatSize = (bytes) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+const requestAutoOcrIndex = () => {
+  if (pendingOcrCount.value <= 0) {
+    autoOcrRerunQueued = false
+    return
+  }
 
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  if (ocrIndexing.value) {
+    autoOcrRerunQueued = true
+    return
+  }
 
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
+  void buildOcrIndex().finally(() => {
+    if (!autoOcrRerunQueued) return
+    autoOcrRerunQueued = false
+    requestAutoOcrIndex()
+  })
+}
+
+watch(
+  () => props.images.map((image) => getImageKey(image)),
+  () => {
+    requestAutoOcrIndex()
+  },
+  { immediate: true }
+)
+
+const resolveSourcePage = (image) => {
+  const pageValue = Number(image?.page)
+  if (!Number.isFinite(pageValue) || pageValue <= 0) return null
+  return Math.round(pageValue)
+}
+
+const canOpenSourceDocument = (image) => {
+  const projectId = String(props.projectId || '').trim()
+  const documentId = String(image?.documentId || '').trim()
+  return Boolean(projectId && documentId)
+}
+
+const shouldAttachPageAnchor = (image) => {
+  const sourceFileType = String(image?.sourceFileType || '').trim().toLowerCase()
+  return !['.md', '.markdown', 'md', 'markdown'].includes(sourceFileType)
+}
+
+const buildSourcePreviewUrl = (image) => {
+  if (!canOpenSourceDocument(image)) return ''
+
+  const projectId = encodeURIComponent(String(props.projectId || '').trim())
+  const documentId = encodeURIComponent(String(image?.documentId || '').trim())
+  const timestamp = Date.now()
+  let previewUrl = `/api/projects/${projectId}/documents/${documentId}/preview?t=${timestamp}`
+
+  const page = resolveSourcePage(image)
+  if (page && shouldAttachPageAnchor(image)) {
+    previewUrl += `#page=${page}`
+  }
+
+  return previewUrl
+}
+
+const getSourceButtonTitle = (image) => {
+  const page = resolveSourcePage(image)
+  if (page) return `打开原文档第${page}页`
+  return '打开原文档'
+}
+
+const openSourceDocument = (image) => {
+  const previewUrl = buildSourcePreviewUrl(image)
+  if (!previewUrl) {
+    notify.warning('当前图片缺少源文档信息')
+    return
+  }
+
+  const popup = window.open(previewUrl, '_blank', 'noopener')
+  if (!popup) {
+    notify.warning('浏览器拦截了新窗口，请允许弹窗后重试')
+  }
 }
 
 const downloadImage = (image) => {
@@ -465,14 +621,15 @@ onBeforeUnmount(() => {
 
 .gallery-grid {
   display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 132px));
+  justify-content: flex-start;
 }
 
 .image-card {
   background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
   border: 1px solid #e3eaf7;
-  border-radius: 12px;
+  border-radius: 10px;
   overflow: hidden;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
@@ -487,9 +644,10 @@ onBeforeUnmount(() => {
   background-color: #f4f7fc;
   cursor: zoom-in;
   display: flex;
-  height: 150px;
+  height: 88px;
   justify-content: center;
   overflow: hidden;
+  position: relative;
 }
 
 .image-container img {
@@ -498,54 +656,69 @@ onBeforeUnmount(() => {
   object-fit: contain;
 }
 
-.image-info {
+.image-overlay-actions {
+  align-items: center;
+  background: linear-gradient(180deg, rgba(12, 18, 32, 0.52) 0%, rgba(12, 18, 32, 0.18) 100%);
+  border-radius: 999px;
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.6rem;
+  gap: 0.2rem;
+  opacity: 0;
+  padding: 0.16rem;
+  pointer-events: none;
+  position: absolute;
+  right: 0.3rem;
+  top: 0.3rem;
+  transform: translateY(-2px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 
-.info-top {
-  align-items: center;
-  display: flex;
-  gap: 0.5rem;
-  justify-content: space-between;
+.image-card:hover .image-overlay-actions,
+.image-card:focus-within .image-overlay-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .image-overlay-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+}
+
+.image-overlay-actions :deep(.app-btn) {
+  min-width: 0;
+}
+
+.image-overlay-actions :deep(.app-btn.is-sm.is-circle) {
+  border-radius: 999px;
+  height: 24px;
+  width: 24px;
+}
+
+.image-overlay-actions :deep(.app-btn.is-ghost) {
+  --btn-bg: rgba(255, 255, 255, 0.9);
+  --btn-bg-hover: #ffffff;
+  --btn-bg-active: #f2f5ff;
+  --btn-color: #365fbe;
+  --btn-border: transparent;
+  --btn-shadow: none;
+  --btn-shadow-hover: none;
+}
+
+.image-info {
+  padding: 0.33rem 0.42rem 0.4rem;
 }
 
 .image-name {
   color: #303133;
-  flex: 1;
-  font-size: 0.875rem;
+  display: block;
+  font-size: 0.73rem;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.info-meta {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.image-size {
-  color: #909399;
-  font-size: 0.75rem;
-}
-
-.image-source {
-  color: #4f8cff;
-  font-size: 0.75rem;
-}
-
-.ocr-preview {
-  color: #606266;
-  display: -webkit-box;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .no-images {

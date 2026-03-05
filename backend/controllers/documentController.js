@@ -7,7 +7,7 @@ const config = require('../config');
 const jobService = require('../services/jobService');
 const { normalizeUploadedFilename } = require('../utils/filename');
 
-const SUPPORTED_EXTENSIONS = ['.docx', '.doc', '.pdf'];
+const SUPPORTED_EXTENSIONS = ['.docx', '.doc', '.pptx', '.ppt', '.pdf', '.md', '.markdown'];
 
 const parseBooleanFlag = (value, defaultValue = true) => {
   if (value === undefined || value === null || value === '') return defaultValue;
@@ -28,7 +28,7 @@ const validateFileType = (filePath) => {
   const fileExt = path.extname(filePath || '').toLowerCase();
   if (!SUPPORTED_EXTENSIONS.includes(fileExt)) {
     throw toUserError(
-      new Error('不支持的文件类型，仅支持 .docx、.doc 和 .pdf 文件'),
+      new Error('不支持的文件类型，仅支持 .docx、.doc、.pptx、.ppt、.pdf、.md 和 .markdown 文件'),
       'UNSUPPORTED_FILE_TYPE',
       400
     );
@@ -161,7 +161,8 @@ const processExtractionTask = async (options = {}) => {
       projectId,
       runId: run.id,
       documentId: document.id,
-      sourceName
+      sourceName,
+      fileType: document.fileType || fileExt
     };
   }
 
@@ -245,6 +246,7 @@ const processExtractionTask = async (options = {}) => {
             images: result.images || [],
             sourceName: runContext.sourceName,
             documentId: runContext.documentId,
+            fileType: runContext.fileType || fileExt,
             jobId
           }
         );

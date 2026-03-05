@@ -19,6 +19,7 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^3.11.174",
+    "undici": "^6.23.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

@@ -12,13 +12,13 @@
         ref="fileInputRef"
         type="file"
         multiple
-        accept=".docx,.doc,.pdf"
+        accept=".docx,.doc,.pptx,.ppt,.pdf,.md,.markdown"
         :disabled="disabled || isUploading"
         @change="handleFileInput"
       />
       <AppIcon name="upload" class="upload-icon" />
       <p class="upload-title">拖拽文档到此处或点击上传（单文件 / 批量）</p>
-      <p class="upload-tip">支持 .docx、.doc 和 .pdf 文件，单个文件不超过 50MB；智能去重默认开启</p>
+      <p class="upload-tip">支持 .docx、.doc、.pptx、.ppt、.pdf、.md 和 .markdown 文件，单个文件不超过 50MB；智能去重默认开启</p>
       <p v-if="selectedFileLabel" class="upload-file">已选择：{{ selectedFileLabel }}</p>
     </div>
 
@@ -152,7 +152,10 @@ const getProgressText = () => {
   if (uploadMode.value === 'batch') return backendMessage.value || '正在创建批量任务...'
   if (backendMessage.value) return backendMessage.value
   if (uploadTransportProgress.value < 100) return '正在上传文件...'
-  return fileType.value === 'pdf' ? '正在处理 PDF...' : '正在处理 Word 文档...'
+  if (fileType.value === 'pdf') return '正在处理 PDF...'
+  if (fileType.value === 'markdown') return '正在处理 Markdown 文档...'
+  if (fileType.value === 'ppt') return '正在处理 PowerPoint 文档...'
+  return '正在处理 Word 文档...'
 }
 
 const toAbsoluteUrl = (value) => {
@@ -185,10 +188,21 @@ const validateFile = (file) => {
     file.type === 'application/msword' ||
     ext === '.docx' ||
     ext === '.doc'
+  const isPptDoc = file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    file.type === 'application/vnd.ms-powerpoint' ||
+    file.type === 'application/mspowerpoint' ||
+    file.type === 'application/powerpoint' ||
+    ext === '.pptx' ||
+    ext === '.ppt'
+  const isMarkdownDoc = file.type === 'text/markdown' ||
+    file.type === 'text/x-markdown' ||
+    (file.type === 'text/plain' && (ext === '.md' || ext === '.markdown')) ||
+    ext === '.md' ||
+    ext === '.markdown'
   const isPdfDoc = file.type === 'application/pdf' || ext === '.pdf'
 
-  if (!isWordDoc && !isPdfDoc) {
-    notify.error('只能上传 Word 文档或 PDF 文件')
+  if (!isWordDoc && !isPptDoc && !isMarkdownDoc && !isPdfDoc) {
+    notify.error('只能上传 Word、PowerPoint、Markdown 文档或 PDF 文件')
     return { valid: false }
   }
 
@@ -200,7 +214,7 @@ const validateFile = (file) => {
 
   return {
     valid: true,
-    type: isPdfDoc ? 'pdf' : 'word'
+    type: isPdfDoc ? 'pdf' : (isPptDoc ? 'ppt' : (isMarkdownDoc ? 'markdown' : 'word'))
   }
 }
 

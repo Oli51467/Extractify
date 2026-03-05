@@ -64,25 +64,6 @@
             </div>
           </div>
 
-          <div v-if="task.type === 'run' && task.summary" class="task-summary">
-            <div class="summary-item">
-              <span>抽图</span>
-              <strong>{{ task.summary.imageCount }}</strong>
-            </div>
-            <div class="summary-item">
-              <span>去重</span>
-              <strong>{{ task.summary.dedupedCount }}</strong>
-            </div>
-            <div class="summary-item">
-              <span>OCR</span>
-              <strong>{{ task.summary.ocrCount }}</strong>
-            </div>
-            <div class="summary-item">
-              <span>命名</span>
-              <strong>{{ task.summary.renameCount }}</strong>
-            </div>
-          </div>
-
           <div v-if="task.type === 'batch'" class="batch-panel">
             <div class="batch-actions">
               <AppButton size="sm" variant="outline" tone="neutral" @click="emit('toggle-detail', task.id)">
@@ -169,13 +150,6 @@ const toTaskTime = (value) => {
   return Number.isFinite(ts) ? ts : 0
 }
 
-const runSummary = (result = {}) => ({
-  imageCount: Number(result?.imageCount || 0),
-  dedupedCount: Number(result?.dedupe?.dedupedCount || 0),
-  ocrCount: Number(result?.ocr?.indexedCount || 0),
-  renameCount: Number(result?.naming?.renamedCount || 0)
-})
-
 const resolveRunShareUrl = (run) => toAbsoluteUrl(
   run?.result?.share?.url
   || run?.result?.share?.sharePath
@@ -194,7 +168,6 @@ const mergedTasks = computed(() => {
       createdAt: run.createdAt,
       zipUrl: toAbsoluteUrl(result.zipUrl),
       shareUrl: resolveRunShareUrl(run),
-      summary: runSummary(result),
       metaPrimary: `进度 ${Number(run.progress || 0)}%`,
       metaSecondary: run.message || '-'
     }
@@ -374,31 +347,6 @@ const openTaskShare = (task) => {
   white-space: nowrap;
 }
 
-.task-summary {
-  border-top: 1px dashed #e8eef8;
-  display: grid;
-  gap: 0.35rem;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-top: 0.48rem;
-  padding-top: 0.45rem;
-}
-
-.summary-item {
-  background: #f6f9ff;
-  border: 1px solid #e6edfb;
-  border-radius: 8px;
-  color: #61708c;
-  display: flex;
-  font-size: 0.72rem;
-  justify-content: space-between;
-  padding: 0.32rem 0.44rem;
-}
-
-.summary-item strong {
-  color: #2d3f5f;
-  font-size: 0.76rem;
-}
-
 .batch-panel {
   margin-top: 0.45rem;
 }
@@ -438,12 +386,6 @@ const openTaskShare = (task) => {
   border-radius: 8px;
   height: 26px;
   width: 26px;
-}
-
-@media (max-width: 900px) {
-  .task-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 640px) {

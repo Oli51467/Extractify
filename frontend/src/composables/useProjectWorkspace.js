@@ -51,13 +51,18 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
 
   const galleryImages = computed(() => projectAssets.value.map((asset, index) => ({
     id: asset.id || `${asset.runId}_${index}`,
+    runId: asset.runId || '',
+    jobId: asset.jobId || '',
+    documentId: asset.documentId || asset.sourceContext?.documentId || '',
     name: asset.name,
     path: asset.path,
     size: asset.size,
     width: asset.width,
     height: asset.height,
     page: asset.page,
+    sourceFileType: asset.fileType || asset.sourceContext?.fileType || '',
     source: asset.sourceContext?.sourceName || '',
+    ocrIndexed: Boolean(asset.ocrIndexed),
     ocrText: asset.ocrText || ''
   })))
 
@@ -68,6 +73,7 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
         url: run.result.zipUrl,
         name: run.sourceName || `任务 ${index + 1}`,
         count: Number(run.result.imageCount || 0),
+        runId: run.id || '',
         jobId: run.jobId || '',
         fileName: `${(run.sourceName || `images_${index + 1}`).replace(/[\\/:*?"<>|]/g, '_')}.zip`
       }))
