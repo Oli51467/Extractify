@@ -149,12 +149,23 @@
     <div v-if="mergedImageUrl" class="merge-result">
       <div class="merge-result-header">
         <span>拼接结果（{{ mergedImageWidth }} × {{ mergedImageHeight }}）</span>
-        <AppButton tone="success" variant="outline" @click="downloadMergedImage">
-          <template #icon>
-            <AppIcon name="download" />
-          </template>
-          下载长图
-        </AppButton>
+        <div class="merge-result-actions">
+          <AppButton
+            tone="primary"
+            variant="outline"
+            :loading="isSavingToAssets"
+            :disabled="!mergedImageBlob"
+            @click="saveMergedImageToAssets"
+          >
+            添加到素材库
+          </AppButton>
+          <AppButton tone="success" variant="outline" @click="downloadMergedImage">
+            <template #icon>
+              <AppIcon name="download" />
+            </template>
+            下载长图
+          </AppButton>
+        </div>
       </div>
       <div class="merge-result-image" @click="openPreview(mergedImageUrl)">
         <img :src="mergedImageUrl" alt="merged" />
@@ -172,10 +183,18 @@
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { notify } from '../services/notify'
+import { uploadMergedImageToAssetLibrary } from '../services/projectApi'
 import AppButton from './ui/AppButton.vue'
 import AppInput from './ui/AppInput.vue'
 import AppIcon from './ui/AppIcon.vue'
 import AppModal from './ui/AppModal.vue'
+
+const props = defineProps({
+  assetProjectId: {
+    type: String,
+    default: ''
+  }
+})
 
 const createItemUid = () => `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
@@ -196,9 +215,11 @@ const watermarkMargin = ref(24)
 const isMergingImages = ref(false)
 const mergedImageUrl = ref('')
 const mergedImageName = ref('')
+const mergedImageBlob = ref(null)
 const mergedImageWidth = ref(0)
 const mergedImageHeight = ref(0)
 const mergePreviewItems = ref([])
+const isSavingToAssets = ref(false)
 
 const dragSourceIndex = ref(-1)
 const dragOverIndex = ref(-1)
@@ -215,6 +236,7 @@ const resetMergedResult = () => {
     mergedImageUrl.value = ''
   }
   mergedImageName.value = ''
+  mergedImageBlob.value = null
   mergedImageWidth.value = 0
   mergedImageHeight.value = 0
 }
@@ -512,6 +534,7 @@ const handleMergeImages = async () => {
     mergedImageWidth.value = canvas.width
     mergedImageHeight.value = canvas.height
     mergedImageName.value = `merged_${mergeDirection.value}_${Date.now()}.png`
+    mergedImageBlob.value = blob
 
     notify.success('长图生成成功')
   } catch (error) {
@@ -534,6 +557,33 @@ const downloadMergedImage = () => {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+}
+
+const saveMergedImageToAssets = async () => {
+  if (!mergedImageBlob.value) {
+    notify.warning('请先生成长图')
+    return
+  }
+
+  const projectId = String(props.assetProjectId || '').trim()
+  if (!projectId) {
+    notify.warning('请先选择素材库项目')
+    return
+  }
+
+  isSavingToAssets.value = true
+  try {
+    await uploadMergedImageToAssetLibrary(
+      projectId,
+      mergedImageBlob.value,
+      mergedImageName.value || `merged_${Date.now()}.png`
+    )
+    notify.success('长图已添加到素材库')
+  } catch (error) {
+    notify.error(error.message || '添加到素材库失败')
+  } finally {
+    isSavingToAssets.value = false
+  }
 }
 
 const clearMergeState = () => {
@@ -900,6 +950,13 @@ defineExpose({
   gap: 0.75rem;
   justify-content: space-between;
   margin-bottom: 0.75rem;
+}
+
+.merge-result-actions {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 .merge-result-image {

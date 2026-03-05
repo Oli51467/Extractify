@@ -1,6 +1,7 @@
 <template>
-  <div class="workspace">
+  <div class="workspace" :class="{ 'is-single-pane': !showSidebar }">
     <ProjectSidebar
+      v-if="showSidebar"
       :projects="projects"
       :selected-project-id="selectedProjectId"
       :workspace-type="workspaceType"
@@ -11,52 +12,76 @@
       @delete-project="deleteCurrentProject"
     />
 
-    <section class="workspace-main">
+    <section class="workspace-main" :class="{ 'is-contained-pane': !isExtractWorkbench }">
+      <div v-if="showWorkspaceToolbar" class="workspace-toolbar">
+        <label class="workspace-project-switcher">
+          <span class="workspace-switcher-label">当前项目</span>
+          <select
+            v-model="selectedProjectId"
+            class="workspace-switcher-select"
+            :disabled="projects.length === 0"
+          >
+            <option v-if="projects.length === 0" value="" disabled>
+              暂无项目
+            </option>
+            <option
+              v-for="project in projects"
+              :key="project.id"
+              :value="project.id"
+            >
+              {{ project.name }}
+            </option>
+          </select>
+        </label>
+      </div>
       <template v-if="isMergifyWorkbench">
         <AppCard class="merge-workbench-card">
           <template #header>
             <div class="merge-workbench-header">
               <div class="merge-workbench-title">文档合并</div>
-              <AppButton
-                size="sm"
-                variant="outline"
-                tone="neutral"
-                @click="handleImportFromExtractProject"
-              >
-                <template #icon>
-                  <AppIcon name="upload" />
-                </template>
-                Import from Extract
-              </AppButton>
+              <label class="merge-workbench-asset-target">
+                <span class="merge-workbench-asset-label">素材库项目</span>
+                <select
+                  v-model="mergeAssetProjectId"
+                  class="merge-workbench-asset-select"
+                  :disabled="mergeAssetProjects.length === 0"
+                >
+                  <option v-if="mergeAssetProjects.length === 0" value="" disabled>
+                    暂无 Extract 项目
+                  </option>
+                  <option
+                    v-for="project in mergeAssetProjects"
+                    :key="project.id"
+                    :value="project.id"
+                  >
+                    {{ project.name }}
+                  </option>
+                </select>
+              </label>
             </div>
           </template>
-          <ImageMerger ref="imageMergerRef" />
+          <ImageMerger :asset-project-id="mergeAssetProjectId" />
         </AppCard>
       </template>
       <template v-else>
-        <WorkspaceTabs
-          v-if="selectedProject"
-          :tabs="tabs"
-          v-model:active-tab="activeTab"
-        />
-
         <template v-if="selectedProject">
           <DocumentsTab
-            v-if="activeTab === 'documents'"
+            v-if="isExtractWorkbench"
             :project-id="selectedProject.id"
             :project-documents="projectDocuments"
             @upload-finished="handleSingleExtracted"
+            @delete-document="handleDeleteDocument"
           />
 
           <AssetsTab
-            v-else-if="activeTab === 'assets'"
+            v-else-if="isAssetsWorkbench"
             :project-id="selectedProject.id"
             :gallery-images="galleryImages"
             :zip-urls="zipUrls"
           />
 
           <HistoryTab
-            v-else-if="activeTab === 'history'"
+            v-else-if="isHistoryWorkbench"
             :project-runs="projectRuns"
             :project-batches="projectBatches"
             :expanded-batch-id="expandedBatchId"
@@ -76,33 +101,25 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useProjectWorkspace } from '../composables/useProjectWorkspace'
-import { fetchProjects as fetchWorkspaceProjects, fetchProjectAssets } from '../services/projectApi'
-import { notify } from '../services/notify'
-import { openPromptDialog } from '../services/dialog'
+import { fetchProjects as fetchWorkspaceProjects } from '../services/projectApi'
 import ProjectSidebar from '../components/workspace/ProjectSidebar.vue'
-import WorkspaceTabs from '../components/workspace/WorkspaceTabs.vue'
 import DocumentsTab from '../components/workspace/DocumentsTab.vue'
 import AssetsTab from '../components/workspace/AssetsTab.vue'
 import HistoryTab from '../components/workspace/HistoryTab.vue'
 import ImageMerger from '../components/ImageMerger.vue'
 import AppCard from '../components/ui/AppCard.vue'
-import AppButton from '../components/ui/AppButton.vue'
-import AppIcon from '../components/ui/AppIcon.vue'
 import AppEmpty from '../components/ui/AppEmpty.vue'
 
 const route = useRoute()
-const workspaceType = computed(() => route.path === '/mergify' ? 'merge' : 'extract')
-const imageMergerRef = ref(null)
+const workspaceType = computed(() => route.name === 'DocPixMerge' ? 'merge' : 'extract')
 
 const {
-  tabs,
   projects,
   selectedProjectId,
   selectedProject,
-  activeTab,
   projectDocuments,
   projectRuns,
   projectBatches,
@@ -117,61 +134,43 @@ const {
   toggleBatchDetail,
   retryBatchFailed,
   cancelBatchQueued,
-  handleSingleExtracted
+  handleSingleExtracted,
+  handleDeleteDocument
 } = useProjectWorkspace(workspaceType)
 
-const isMergifyWorkbench = computed(() => route.path === '/mergify')
+const isMergifyWorkbench = computed(() => route.name === 'DocPixMerge')
+const isAssetsWorkbench = computed(() => route.name === 'DocPixAssets')
+const isHistoryWorkbench = computed(() => route.name === 'DocPixHistory')
+const isExtractWorkbench = computed(
+  () => !isMergifyWorkbench.value && !isAssetsWorkbench.value && !isHistoryWorkbench.value
+)
+const showSidebar = computed(() => isExtractWorkbench.value)
+const showWorkspaceToolbar = computed(() => !isExtractWorkbench.value)
+const mergeAssetProjects = ref([])
+const mergeAssetProjectId = ref('')
 
-const handleImportFromExtractProject = async () => {
+const loadMergeAssetProjects = async () => {
   try {
-    const extractProjects = await fetchWorkspaceProjects('extract')
-    if (!extractProjects.length) {
-      notify.warning('暂无可导入素材的解析项目')
-      return
-    }
-
-    let sourceProject = extractProjects[0]
-    if (extractProjects.length > 1) {
-      const candidateList = extractProjects.slice(0, 12)
-      const message = `Enter the extract project index to import: ${candidateList
-        .map((project, index) => `${index + 1}. ${project.name}`)
-        .join(' ｜ ')}`
-
-      const result = await openPromptDialog({
-        title: 'Import Extract Assets',
-        message,
-        defaultValue: '1',
-        confirmText: 'Import'
-      })
-      if (!result?.confirmed) return
-
-      const selectedIndex = Number(result.value) - 1
-      if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= candidateList.length) {
-        notify.warning('输入的序号无效')
-        return
-      }
-      sourceProject = candidateList[selectedIndex]
-    }
-
-    const assets = await fetchProjectAssets(sourceProject.id, 1000)
-    const imported = imageMergerRef.value?.appendRemoteImages(
-      assets
-        .filter((asset) => asset?.path)
-        .map((asset) => ({
-          name: asset.name || 'imported_image',
-          url: asset.path
-        }))
-    ) || 0
-
-    if (imported > 0) {
-      notify.success(`已从「${sourceProject.name}」导入 ${imported} 张素材`)
-    } else {
-      notify.warning('该项目暂无可导入素材')
+    const projects = await fetchWorkspaceProjects('extract')
+    mergeAssetProjects.value = projects
+    const hasSelected = projects.some((project) => project.id === mergeAssetProjectId.value)
+    if (!hasSelected) {
+      mergeAssetProjectId.value = projects[0]?.id || ''
     }
   } catch (error) {
-    notify.error(error.message || '导入解析素材失败')
+    mergeAssetProjects.value = []
+    mergeAssetProjectId.value = ''
   }
 }
+
+watch(
+  isMergifyWorkbench,
+  (active) => {
+    if (!active) return
+    loadMergeAssetProjects()
+  },
+  { immediate: true }
+)
 
 const handleSelectProject = (projectId) => {
   selectedProjectId.value = projectId
@@ -185,10 +184,57 @@ const handleSelectProject = (projectId) => {
   gap: 1rem;
 }
 
+.workspace.is-single-pane {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace-main {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+}
+
+.workspace-main.is-contained-pane {
+  margin: 0 auto;
+  max-width: 1160px;
+  width: 100%;
+}
+
+.workspace-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+.workspace-project-switcher {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.workspace-switcher-label {
+  color: #7d8aa2;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.workspace-switcher-select {
+  background: #fff;
+  border: 1px solid #d8e2f5;
+  border-radius: 10px;
+  color: #465a7e;
+  font-size: 0.8rem;
+  font-weight: 600;
+  min-height: 34px;
+  min-width: 180px;
+  padding: 0 0.7rem;
+}
+
+.workspace-switcher-select:disabled {
+  color: #9aa7bd;
 }
 
 .merge-workbench-card {
@@ -207,6 +253,30 @@ const handleSelectProject = (projectId) => {
   color: #2d3b56;
   font-size: 0.96rem;
   font-weight: 600;
+}
+
+.merge-workbench-asset-target {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+
+.merge-workbench-asset-label {
+  color: #6f7e97;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.merge-workbench-asset-select {
+  background: #fff;
+  border: 1px solid #d8e2f5;
+  border-radius: 10px;
+  color: #465a7e;
+  font-size: 0.78rem;
+  font-weight: 600;
+  min-height: 32px;
+  min-width: 180px;
+  padding: 0 0.62rem;
 }
 
 .project-empty {

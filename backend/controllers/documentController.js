@@ -8,6 +8,8 @@ const jobService = require('../services/jobService');
 const { normalizeUploadedFilename } = require('../utils/filename');
 
 const SUPPORTED_EXTENSIONS = ['.docx', '.doc', '.pptx', '.ppt', '.pdf', '.md', '.markdown'];
+const IMAGE_PROCESSING_MODE_RAW = 'raw';
+const IMAGE_PROCESSING_MODE_SMART = 'smart';
 
 const parseBooleanFlag = (value, defaultValue = true) => {
   if (value === undefined || value === null || value === '') return defaultValue;
@@ -15,6 +17,45 @@ const parseBooleanFlag = (value, defaultValue = true) => {
   if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
   if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   return defaultValue;
+};
+
+const parseImageProcessingMode = (
+  value,
+  defaultValue = config.processing.imageProcessingModeDefault || IMAGE_PROCESSING_MODE_RAW
+) => {
+  const fallback = String(defaultValue || '').trim().toLowerCase() === IMAGE_PROCESSING_MODE_SMART
+    ? IMAGE_PROCESSING_MODE_SMART
+    : IMAGE_PROCESSING_MODE_RAW;
+
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') {
+    return value ? IMAGE_PROCESSING_MODE_SMART : IMAGE_PROCESSING_MODE_RAW;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if ([
+    IMAGE_PROCESSING_MODE_SMART,
+    'filter',
+    'filtered',
+    '1',
+    'true',
+    'yes',
+    'on'
+  ].includes(normalized)) {
+    return IMAGE_PROCESSING_MODE_SMART;
+  }
+  if ([
+    IMAGE_PROCESSING_MODE_RAW,
+    'all',
+    '0',
+    'false',
+    'no',
+    'off'
+  ].includes(normalized)) {
+    return IMAGE_PROCESSING_MODE_RAW;
+  }
+
+  return fallback;
 };
 
 const toUserError = (error, code = '', statusCode = 500) => {
@@ -57,9 +98,21 @@ const ensureOutputDir = (jobId, projectId = '') => {
 const buildSuccessMessage = (result) => {
   if (!result || !Array.isArray(result.images)) return '图片提取成功';
   if (result.images.length === 0) return '文档中未找到图片';
-  if (result.dedupe && Number(result.dedupe.dedupedCount || 0) > 0) {
-    return `图片提取成功，共 ${result.images.length} 张（已去重 ${result.dedupe.dedupedCount} 张）`;
+  const detailParts = [];
+  const filteredCount = Number(result?.smart?.filteredCount || 0);
+  const dedupedCount = Number(result?.dedupe?.dedupedCount || 0);
+
+  if (filteredCount > 0) {
+    detailParts.push(`已过滤 ${filteredCount} 张装饰图`);
   }
+  if (dedupedCount > 0) {
+    detailParts.push(`已去重 ${dedupedCount} 张`);
+  }
+
+  if (detailParts.length > 0) {
+    return `图片提取成功，共 ${result.images.length} 张（${detailParts.join('，')}）`;
+  }
+
   return `图片提取成功，共 ${result.images.length} 张`;
 };
 
@@ -85,6 +138,10 @@ const processExtractionTask = async (options = {}) => {
   const dedupeEnabled = parseBooleanFlag(options.dedupeEnabled, config.processing.imageDedupeEnabled);
   const ocrEnabled = parseBooleanFlag(options.ocrEnabled, config.processing.autoOcrEnabled);
   const autoNamingEnabled = parseBooleanFlag(options.autoNamingEnabled, config.processing.autoNamingEnabled);
+  const imageProcessingMode = parseImageProcessingMode(
+    options.imageProcessingMode,
+    config.processing.imageProcessingModeDefault
+  );
   const shareEnabled = parseBooleanFlag(options.shareEnabled, config.share.enabled);
   const projectId = String(options.projectId || '').trim();
   const batchId = String(options.batchId || '').trim();
@@ -117,6 +174,7 @@ const processExtractionTask = async (options = {}) => {
     dedupeEnabled,
     ocrEnabled,
     autoNamingEnabled,
+    imageProcessingMode,
     shareEnabled
   }, sessionId);
 
@@ -152,6 +210,7 @@ const processExtractionTask = async (options = {}) => {
         dedupeEnabled,
         ocrEnabled,
         autoNamingEnabled,
+        imageProcessingMode,
         shareEnabled
       }
     });
@@ -184,6 +243,7 @@ const processExtractionTask = async (options = {}) => {
         enableDedupe: dedupeEnabled,
         enableOcr: ocrEnabled,
         enableAutoNaming: autoNamingEnabled,
+        imageProcessingMode,
         sourceName,
         onProgress: reportAll
       });
@@ -217,6 +277,7 @@ const processExtractionTask = async (options = {}) => {
         dedupe: result.dedupe || null,
         naming: result.naming || null,
         ocr: result.ocr || null,
+        smart: result.smart || null,
         share: shareInfo || null
       }
     }, sessionId);
@@ -232,6 +293,7 @@ const processExtractionTask = async (options = {}) => {
           dedupe: result.dedupe || null,
           naming: result.naming || null,
           ocr: result.ocr || null,
+          smart: result.smart || null,
           share: shareInfo || null
         },
         finishedAt: new Date().toISOString()
@@ -292,6 +354,10 @@ const extractImages = async (req, res) => {
   const dedupeEnabled = parseBooleanFlag(req.body?.dedupe, config.processing.imageDedupeEnabled);
   const ocrEnabled = parseBooleanFlag(req.body?.ocr, config.processing.autoOcrEnabled);
   const autoNamingEnabled = parseBooleanFlag(req.body?.autoNaming, config.processing.autoNamingEnabled);
+  const imageProcessingMode = parseImageProcessingMode(
+    req.body?.imageMode ?? req.body?.smartFilter,
+    config.processing.imageProcessingModeDefault
+  );
   const shareEnabled = parseBooleanFlag(req.body?.share, config.share.enabled);
   const projectId = String(req.body?.projectId || req.params?.projectId || '').trim();
   req.setTimeout(config.server.requestTimeoutMs);
@@ -304,6 +370,7 @@ const extractImages = async (req, res) => {
       dedupeEnabled,
       ocrEnabled,
       autoNamingEnabled,
+      imageProcessingMode,
       shareEnabled,
       projectId
     });
@@ -317,6 +384,7 @@ const extractImages = async (req, res) => {
       dedupe: task.result.dedupe || null,
       naming: task.result.naming || null,
       ocr: task.result.ocr || null,
+      smart: task.result.smart || null,
       share: enrichSharePayload(task.share),
       projectId: task.projectId || '',
       runId: task.runId || '',
@@ -405,6 +473,7 @@ const downloadImages = (req, res) => {
 
 module.exports = {
   parseBooleanFlag,
+  parseImageProcessingMode,
   processExtractionTask,
   extractImages,
   getJobStatus,

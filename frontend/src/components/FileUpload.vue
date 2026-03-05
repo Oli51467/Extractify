@@ -18,7 +18,13 @@
       />
       <AppIcon name="upload" class="upload-icon" />
       <p class="upload-title">拖拽文档到此处或点击上传（单文件 / 批量）</p>
-      <p class="upload-tip">支持 .docx、.doc、.pptx、.ppt、.pdf、.md 和 .markdown 文件，单个文件不超过 50MB；智能去重默认开启</p>
+      <p class="upload-tip">支持 .docx、.doc、.pptx、.ppt、.pdf、.md 和 .markdown 文件，单个文件不超过 50MB</p>
+      <div class="upload-options" @click.stop>
+        <label class="smart-toggle" @click.stop>
+          <input v-model="smartFilterEnabled" type="checkbox" :disabled="disabled || isUploading" />
+          <span>高质量过滤</span>
+        </label>
+      </div>
       <p v-if="selectedFileLabel" class="upload-file">已选择：{{ selectedFileLabel }}</p>
     </div>
 
@@ -31,6 +37,7 @@
       <div class="result-title">一键结果已生成</div>
       <div class="result-meta">
         <span>抽图 {{ oneClickResult.imageCount }} 张</span>
+        <span v-if="oneClickResult.smartMode">过滤 {{ oneClickResult.filteredCount }} 张</span>
         <span>去重 {{ oneClickResult.dedupedCount }} 张</span>
         <span>OCR 命中 {{ oneClickResult.ocrIndexedCount }} 张</span>
       </div>
@@ -79,6 +86,7 @@ const selectedFiles = ref([])
 const dragActive = ref(false)
 const sessionReady = ref(false)
 const oneClickResult = ref(null)
+const smartFilterEnabled = ref(true)
 const fileInputRef = ref(null)
 let progressPollTimer = null
 
@@ -260,19 +268,26 @@ const handleUploadResponse = (response) => {
   if (response.success) {
     const dedupedCount = Number(response?.dedupe?.dedupedCount || 0)
     const ocrIndexedCount = Number(response?.ocr?.indexedCount || 0)
+    const filteredCount = Number(response?.smart?.filteredCount || 0)
+    const smartMode = String(response?.smart?.mode || '').trim().toLowerCase() === 'smart'
     const shareUrl = toAbsoluteUrl(response?.share?.url || '')
     const shareDownloadUrl = toAbsoluteUrl(response?.share?.downloadUrl || '')
 
     oneClickResult.value = {
       imageCount: Number(response?.images?.length || 0),
+      filteredCount,
+      smartMode,
       dedupedCount,
       ocrIndexedCount,
       shareUrl,
       shareDownloadUrl
     }
 
-    const successMessage = dedupedCount > 0
-      ? `成功提取 ${response.images.length} 张图片，已去重 ${dedupedCount} 张`
+    const details = []
+    if (smartMode && filteredCount > 0) details.push(`已过滤 ${filteredCount} 张`)
+    if (dedupedCount > 0) details.push(`已去重 ${dedupedCount} 张`)
+    const successMessage = details.length > 0
+      ? `成功提取 ${response.images.length} 张图片（${details.join('，')}）`
       : `成功提取 ${response.images.length} 张图片`
     notify.success(successMessage)
 
@@ -284,6 +299,7 @@ const handleUploadResponse = (response) => {
       dedupe: response.dedupe || null,
       naming: response.naming || null,
       ocr: response.ocr || null,
+      smart: response.smart || null,
       share: response.share || null
     })
   } else {
@@ -340,6 +356,7 @@ const submitSingleFile = async (file, type) => {
   formData.append('dedupe', '1')
   formData.append('ocr', '1')
   formData.append('autoNaming', '1')
+  formData.append('imageMode', smartFilterEnabled.value ? 'smart' : 'raw')
   formData.append('share', '1')
 
   const xhr = new XMLHttpRequest()
@@ -412,6 +429,7 @@ const submitBatchFiles = async (fileEntries) => {
       formData.append('files', item.file)
     })
     formData.append('dedupe', '1')
+    formData.append('imageMode', smartFilterEnabled.value ? 'smart' : 'raw')
     formData.append('name', `批处理 ${new Date().toLocaleString()}`)
 
     const response = await fetch(`/api/projects/${encodeURIComponent(props.projectId)}/batches/extract-images`, {
@@ -562,7 +580,7 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
   transform: none;
 }
 
-.upload-area input {
+.upload-area input[type='file'] {
   display: none;
 }
 
@@ -581,6 +599,32 @@ const formattedProgress = computed(() => Number(uploadProgress.value.toFixed(1))
 .upload-tip {
   color: #8a96ac;
   font-size: 0.78rem;
+  margin: 0;
+}
+
+.upload-options {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  justify-content: center;
+}
+
+.smart-toggle {
+  align-items: center;
+  border: 1px solid #d9e4f8;
+  border-radius: 999px;
+  color: #4f6588;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.74rem;
+  font-weight: 600;
+  gap: 0.35rem;
+  padding: 0.18rem 0.6rem;
+}
+
+.smart-toggle input {
+  accent-color: #4f8cff;
   margin: 0;
 }
 

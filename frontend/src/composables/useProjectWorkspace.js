@@ -8,6 +8,7 @@ import {
   updateProject,
   removeProject,
   fetchProjectDocuments,
+  removeProjectDocument,
   fetchProjectAssets,
   fetchProjectRuns,
   fetchProjectBatches,
@@ -62,6 +63,8 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
     page: asset.page,
     sourceFileType: asset.fileType || asset.sourceContext?.fileType || '',
     source: asset.sourceContext?.sourceName || '',
+    semanticCategory: asset.semanticCategory || asset.sourceContext?.semanticCategory || '',
+    semanticConfidence: Number(asset.semanticConfidence || asset.sourceContext?.semanticConfidence || 0),
     ocrIndexed: Boolean(asset.ocrIndexed),
     ocrText: asset.ocrText || ''
   })))
@@ -236,6 +239,40 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
       loadProjectData(selectedProjectId.value),
       loadProjects()
     ])
+  }
+
+  const handleDeleteDocument = async (documentItem) => {
+    if (!isExtractWorkspace.value) return
+    if (!selectedProjectId.value) return
+
+    const documentId = String(documentItem?.id || '').trim()
+    if (!documentId) return
+    const documentName = String(documentItem?.sourceName || documentItem?.originalFilename || '未命名文档').trim()
+
+    const result = await openConfirmDialog({
+      title: '删除文档',
+      message: `确认删除「${documentName}」吗？将同步清理该文档提取的图片与产物。`,
+      confirmText: '删除',
+      cancelText: '取消'
+    })
+    if (!result?.confirmed) return
+
+    try {
+      const cleanup = await removeProjectDocument(selectedProjectId.value, documentId)
+      await Promise.all([
+        loadProjectData(selectedProjectId.value),
+        loadProjects()
+      ])
+
+      const cleaned = Number(cleanup?.removedAssetCount || 0)
+      if (cleaned > 0) {
+        notify.success(`文档已删除，并清理 ${cleaned} 张提取图片`)
+      } else {
+        notify.success('文档已删除')
+      }
+    } catch (error) {
+      notify.error(error.message || '删除文档失败')
+    }
   }
 
   const setBatchFiles = (files) => {
@@ -455,6 +492,7 @@ export const useProjectWorkspace = (workspaceTypeRef = null) => {
     toggleBatchDetail,
     retryBatchFailed,
     cancelBatchQueued,
-    handleSingleExtracted
+    handleSingleExtracted,
+    handleDeleteDocument
   }
 }

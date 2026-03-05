@@ -1,4 +1,7 @@
+const fs = require('fs');
+const path = require('path');
 const { getDb, createId, nowIso, parseJson, toJson } = require('./dbService');
+const config = require('../config');
 const { normalizeUploadedFilename } = require('../utils/filename');
 
 const PROJECT_NAME_MAX = 80;
@@ -18,6 +21,122 @@ const normalizeWorkspaceType = (value, fallback = WORKSPACE_TYPE_EXTRACT) => {
   if (normalized === WORKSPACE_TYPE_MERGE) return WORKSPACE_TYPE_MERGE;
   if (normalized === WORKSPACE_TYPE_EXTRACT) return WORKSPACE_TYPE_EXTRACT;
   return fallback;
+};
+
+const normalizePathForCompare = (value) => path.resolve(String(value || '')).replace(/\\/g, '/');
+
+const isPathInsideRoot = (targetPath, rootPath) => {
+  const target = normalizePathForCompare(targetPath);
+  const root = normalizePathForCompare(rootPath);
+  return target === root || target.startsWith(`${root}/`);
+};
+
+const safeSegment = (value, fallback = 'value') => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 120);
+  return normalized || fallback;
+};
+
+const toAbsoluteUploadPath = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('/uploads/')) {
+    return path.resolve(config.paths.uploadRoot, raw.replace(/^\/uploads\//, ''));
+  }
+  if (!path.isAbsolute(raw)) return '';
+  return path.resolve(raw);
+};
+
+const isUploadFileAvailable = (value) => {
+  const absolutePath = toAbsoluteUploadPath(value);
+  if (!absolutePath) return false;
+  if (!isPathInsideRoot(absolutePath, config.paths.uploadRoot)) return false;
+
+  try {
+    const stats = fs.statSync(absolutePath);
+    return stats.isFile();
+  } catch (error) {
+    return false;
+  }
+};
+
+const getAvailableDocumentIdSet = (sessionId, projectId) => {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT id, storage_path
+    FROM documents
+    WHERE project_id = ? AND session_id = ? AND deleted_at IS NULL
+  `).all(projectId, sessionId);
+
+  const idSet = new Set();
+  rows.forEach((row) => {
+    if (isUploadFileAvailable(row.storage_path)) {
+      idSet.add(String(row.id || '').trim());
+    }
+  });
+  return idSet;
+};
+
+const sanitizeRunResultPayload = (result = {}) => {
+  if (!result || typeof result !== 'object') return {};
+
+  const next = {
+    ...result
+  };
+  const zipUrl = String(next.zipUrl || '').trim();
+  const zipAvailable = zipUrl ? isUploadFileAvailable(zipUrl) : false;
+
+  if (zipUrl && !zipAvailable) {
+    next.zipUrl = '';
+  }
+
+  if (next.share && typeof next.share === 'object') {
+    const share = {
+      ...next.share
+    };
+    const downloadUrl = String(share.downloadUrl || '').trim();
+    if (!zipAvailable || (downloadUrl && !isUploadFileAvailable(downloadUrl))) {
+      delete next.share;
+    } else {
+      next.share = share;
+    }
+  }
+
+  return next;
+};
+
+const sanitizeAssetDocumentReference = (asset, availableDocumentIdSet) => {
+  if (!asset) return null;
+  const documentId = String(asset.documentId || '').trim();
+  if (!documentId) return asset;
+  if (availableDocumentIdSet.has(documentId)) return asset;
+
+  return {
+    ...asset,
+    documentId: '',
+    sourceContext: {
+      ...(asset.sourceContext || {}),
+      documentId: ''
+    }
+  };
+};
+
+const removePathSafe = async (targetPath, options = {}) => {
+  const absolutePath = path.resolve(String(targetPath || '').trim());
+  if (!absolutePath) return false;
+  if (!isPathInsideRoot(absolutePath, config.paths.uploadRoot)) return false;
+  try {
+    await fs.promises.rm(absolutePath, {
+      force: true,
+      recursive: Boolean(options.recursive)
+    });
+    return true;
+  } catch (error) {
+    console.error(`删除路径失败: ${absolutePath}`, error);
+    return false;
+  }
 };
 
 const resolveWorkspaceFilter = (value) => {
@@ -89,6 +208,8 @@ const mapAssetRow = (row) => {
   const source = parseJson(row.source_context_json, {});
   const sourceName = normalizeUploadedFilename(source.sourceName, '');
   const sourceFileType = String(source.fileType || '').trim().toLowerCase();
+  const semanticCategory = String(source.semanticCategory || '').trim().toLowerCase();
+  const semanticConfidence = Number(source.semanticConfidence || 0);
   return {
     id: row.id,
     projectId: row.project_id,
@@ -106,10 +227,14 @@ const mapAssetRow = (row) => {
     isPrimary: Number(row.is_primary || 0) === 1,
     ocrText: String(row.ocr_text || '').trim(),
     ocrIndexed: Number(row.ocr_indexed || 0) === 1,
+    semanticCategory,
+    semanticConfidence: Number.isFinite(semanticConfidence) ? semanticConfidence : 0,
     sourceContext: {
       ...source,
       sourceName,
-      fileType: sourceFileType
+      fileType: sourceFileType,
+      semanticCategory,
+      semanticConfidence: Number.isFinite(semanticConfidence) ? semanticConfidence : 0
     },
     createdAt: row.created_at
   };
@@ -449,7 +574,200 @@ const listDocuments = (sessionId, projectId, options = {}) => {
     LIMIT ? OFFSET ?
   `).all(projectId, sessionId, limit, offset);
 
-  return rows.map(mapDocumentRow);
+  return rows
+    .map(mapDocumentRow)
+    .filter((document) => document && isUploadFileAvailable(document.storagePath));
+};
+
+const deleteDocument = async (sessionId, projectId, documentId) => {
+  assertProjectOwnedBySession(sessionId, projectId);
+  const document = getDocumentById(sessionId, projectId, documentId);
+  if (!document) {
+    const error = new Error('文档不存在');
+    error.code = 'DOCUMENT_NOT_FOUND';
+    throw error;
+  }
+
+  const db = getDb();
+  const now = nowIso();
+  const runRows = db.prepare(`
+    SELECT id, job_id, result_json
+    FROM runs
+    WHERE project_id = ? AND session_id = ? AND document_id = ?
+  `).all(projectId, sessionId, documentId);
+  const assetRows = db.prepare(`
+    SELECT path
+    FROM assets
+    WHERE project_id = ? AND session_id = ? AND document_id = ?
+  `).all(projectId, sessionId, documentId);
+
+  const runIdSet = new Set(
+    runRows
+      .map((row) => String(row.id || '').trim())
+      .filter(Boolean)
+  );
+  const jobIdSet = new Set(
+    runRows
+      .map((row) => String(row.job_id || '').trim())
+      .filter(Boolean)
+  );
+  if (document.jobId) {
+    jobIdSet.add(String(document.jobId).trim());
+  }
+
+  const shareMap = new Map();
+  runIdSet.forEach((runId) => {
+    const rows = db.prepare(`
+      SELECT id, zip_path
+      FROM share_links
+      WHERE project_id = ? AND session_id = ? AND run_id = ?
+    `).all(projectId, sessionId, runId);
+    rows.forEach((row) => {
+      shareMap.set(String(row.id || ''), row);
+    });
+  });
+  jobIdSet.forEach((jobId) => {
+    const rows = db.prepare(`
+      SELECT id, zip_path
+      FROM share_links
+      WHERE project_id = ? AND session_id = ? AND job_id = ?
+    `).all(projectId, sessionId, jobId);
+    rows.forEach((row) => {
+      shareMap.set(String(row.id || ''), row);
+    });
+  });
+
+  const cleanupFilePaths = new Set();
+  const cleanupDirPaths = new Set();
+
+  const documentPath = toAbsoluteUploadPath(document.storagePath);
+  if (documentPath && isPathInsideRoot(documentPath, config.paths.uploadRoot)) {
+    cleanupFilePaths.add(documentPath);
+  }
+
+  assetRows.forEach((row) => {
+    const assetPath = toAbsoluteUploadPath(row.path);
+    if (assetPath && isPathInsideRoot(assetPath, config.paths.uploadRoot)) {
+      cleanupFilePaths.add(assetPath);
+    }
+  });
+
+  runRows.forEach((row) => {
+    const jobId = String(row.job_id || '').trim();
+    if (jobId) {
+      const runDir = path.join(
+        config.paths.uploadRoot,
+        'projects',
+        safeSegment(projectId, 'project'),
+        'runs',
+        safeSegment(jobId, 'job'),
+        'images'
+      );
+      if (isPathInsideRoot(runDir, config.paths.uploadRoot)) {
+        cleanupDirPaths.add(runDir);
+      }
+    }
+
+    const result = parseJson(row.result_json, {});
+    const zipPath = toAbsoluteUploadPath(result?.zipUrl || '');
+    if (zipPath && isPathInsideRoot(zipPath, config.paths.uploadRoot)) {
+      cleanupFilePaths.add(zipPath);
+    }
+  });
+
+  shareMap.forEach((row) => {
+    const zipPath = toAbsoluteUploadPath(row.zip_path || '');
+    if (zipPath && isPathInsideRoot(zipPath, config.paths.uploadRoot)) {
+      cleanupFilePaths.add(zipPath);
+    }
+  });
+
+  let removedAssetCount = 0;
+  let removedRunCount = 0;
+  let removedShareCount = 0;
+
+  const tx = db.transaction(() => {
+    const updatedDocument = db.prepare(`
+      UPDATE documents
+      SET deleted_at = ?, updated_at = ?
+      WHERE id = ? AND project_id = ? AND session_id = ? AND deleted_at IS NULL
+    `).run(now, now, documentId, projectId, sessionId);
+    if (updatedDocument.changes === 0) {
+      const error = new Error('文档不存在或已删除');
+      error.code = 'DOCUMENT_NOT_FOUND';
+      throw error;
+    }
+
+    removedAssetCount = db.prepare(`
+      DELETE FROM assets
+      WHERE project_id = ? AND session_id = ? AND document_id = ?
+    `).run(projectId, sessionId, documentId).changes;
+
+    removedRunCount = db.prepare(`
+      DELETE FROM runs
+      WHERE project_id = ? AND session_id = ? AND document_id = ?
+    `).run(projectId, sessionId, documentId).changes;
+
+    db.prepare(`
+      UPDATE batch_items
+      SET run_id = '',
+          document_id = '',
+          result_json = '{}',
+          updated_at = ?,
+          message = CASE
+            WHEN status = 'completed' THEN '关联文档已删除'
+            ELSE message
+          END
+      WHERE project_id = ? AND session_id = ? AND document_id = ?
+    `).run(now, projectId, sessionId, documentId);
+
+    runIdSet.forEach((runId) => {
+      removedShareCount += db.prepare(`
+        DELETE FROM share_links
+        WHERE project_id = ? AND session_id = ? AND run_id = ?
+      `).run(projectId, sessionId, runId).changes;
+    });
+    jobIdSet.forEach((jobId) => {
+      removedShareCount += db.prepare(`
+        DELETE FROM share_links
+        WHERE project_id = ? AND session_id = ? AND job_id = ?
+      `).run(projectId, sessionId, jobId).changes;
+    });
+
+    touchProject(projectId);
+    createAuditEvent(sessionId, projectId, 'document', documentId, 'document.deleted', {
+      sourceName: document.sourceName,
+      removedRunCount,
+      removedAssetCount
+    });
+  });
+  tx();
+
+  let cleanedFileCount = 0;
+  let cleanedDirCount = 0;
+  // 先删除目录，避免重复逐文件清理导致额外 IO
+  const cleanupDirList = Array.from(cleanupDirPaths);
+  const cleanupFileList = Array.from(cleanupFilePaths);
+
+  for (const dirPath of cleanupDirList) {
+    if (await removePathSafe(dirPath, { recursive: true })) {
+      cleanedDirCount += 1;
+    }
+  }
+  for (const filePath of cleanupFileList) {
+    if (await removePathSafe(filePath, { recursive: false })) {
+      cleanedFileCount += 1;
+    }
+  }
+
+  return {
+    documentId,
+    removedRunCount,
+    removedAssetCount,
+    removedShareCount,
+    cleanedFileCount,
+    cleanedDirCount
+  };
 };
 
 const createRun = (sessionId, projectId, payload = {}) => {
@@ -586,7 +904,16 @@ const listRuns = (sessionId, projectId, options = {}) => {
     LIMIT ? OFFSET ?
   `).all(projectId, sessionId, limit, offset);
 
-  return rows.map(mapRunRow);
+  return rows
+    .map(mapRunRow)
+    .map((run) => {
+      if (!run) return null;
+      return {
+        ...run,
+        result: sanitizeRunResultPayload(run.result)
+      };
+    })
+    .filter(Boolean);
 };
 
 const replaceRunAssets = (sessionId, projectId, runId, payload = {}) => {
@@ -636,7 +963,11 @@ const replaceRunAssets = (sessionId, projectId, runId, payload = {}) => {
           page: image.page == null ? null : Number(image.page),
           runId,
           documentId: payload.documentId || run.documentId || '',
-          fileType: sanitizeText(payload.fileType, 20, '').toLowerCase()
+          fileType: sanitizeText(payload.fileType, 20, '').toLowerCase(),
+          semanticCategory: sanitizeText(image.semanticCategory, 40, '').toLowerCase(),
+          semanticConfidence: Number.isFinite(Number(image.semanticConfidence))
+            ? Number(image.semanticConfidence)
+            : 0
         }),
         now
       );
@@ -676,7 +1007,11 @@ const listAssets = (sessionId, projectId, options = {}) => {
       LIMIT ? OFFSET ?
     `).all(projectId, sessionId, limit, offset);
 
-  return rows.map(mapAssetRow);
+  const availableDocumentIdSet = getAvailableDocumentIdSet(sessionId, projectId);
+  return rows
+    .map(mapAssetRow)
+    .filter((asset) => asset && isUploadFileAvailable(asset.path))
+    .map((asset) => sanitizeAssetDocumentReference(asset, availableDocumentIdSet));
 };
 
 const listAssetsByRun = (sessionId, projectId, runId) => {
@@ -687,7 +1022,11 @@ const listAssetsByRun = (sessionId, projectId, runId) => {
     WHERE run_id = ? AND project_id = ? AND session_id = ?
     ORDER BY created_at DESC
   `).all(runId, projectId, sessionId);
-  return rows.map(mapAssetRow);
+  const availableDocumentIdSet = getAvailableDocumentIdSet(sessionId, projectId);
+  return rows
+    .map(mapAssetRow)
+    .filter((asset) => asset && isUploadFileAvailable(asset.path))
+    .map((asset) => sanitizeAssetDocumentReference(asset, availableDocumentIdSet));
 };
 
 const getAssetById = (sessionId, projectId, assetId) => {
@@ -1092,6 +1431,7 @@ module.exports = {
   createDocument,
   getDocumentById,
   listDocuments,
+  deleteDocument,
   createRun,
   getRunById,
   getRunByJob,

@@ -1,18 +1,23 @@
 const batchProcessingService = require('../services/batchProcessingService');
 const projectService = require('../services/projectService');
-const { parseBooleanFlag } = require('./documentController');
+const { parseBooleanFlag, parseImageProcessingMode } = require('./documentController');
 const config = require('../config');
 
 const createBatch = (req, res) => {
   try {
     const files = Array.isArray(req.files) ? req.files : [];
     const dedupeEnabled = parseBooleanFlag(req.body?.dedupe, config.processing.imageDedupeEnabled);
+    const imageProcessingMode = parseImageProcessingMode(
+      req.body?.imageMode ?? req.body?.smartFilter,
+      config.processing.imageProcessingModeDefault
+    );
     const result = batchProcessingService.createBatchFromUploadedFiles(
       req.sessionId,
       req.params.projectId,
       files,
       {
         dedupeEnabled,
+        imageProcessingMode,
         name: req.body?.name || ''
       }
     );

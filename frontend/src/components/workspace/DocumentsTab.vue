@@ -9,25 +9,35 @@
         <div class="panel-card-header">项目文档（{{ projectDocuments.length }}）</div>
       </template>
       <div v-if="projectDocuments.length > 0" class="simple-list">
-        <button
-          v-for="doc in projectDocuments"
-          :key="doc.id"
-          type="button"
-          class="simple-item"
-          :title="`点击在线查看：${doc.sourceName || '未命名文档'}`"
-          @click="openDocPreview(doc)"
-        >
-          <div class="simple-item-title">
-            <span>{{ doc.sourceName }}</span>
-            <span class="simple-item-type-tag" :class="resolveFileTypeClass(doc.fileType)">
-              {{ resolveFileTypeLabel(doc.fileType) }}
-            </span>
+        <div v-for="doc in projectDocuments" :key="doc.id" class="simple-item">
+          <button
+            type="button"
+            class="simple-item-main"
+            :title="`点击在线查看：${doc.sourceName || '未命名文档'}`"
+            @click="openDocPreview(doc)"
+          >
+            <div class="simple-item-title">
+              <span>{{ doc.sourceName }}</span>
+              <span class="simple-item-type-tag" :class="resolveFileTypeClass(doc.fileType)">
+                {{ resolveFileTypeLabel(doc.fileType) }}
+              </span>
+            </div>
+            <div class="simple-item-meta">
+              <span>{{ formatSize(doc.fileSize) }}</span>
+              <span>{{ formatDate(doc.createdAt) }}</span>
+            </div>
+          </button>
+          <div class="simple-item-actions">
+            <AppButton
+              size="sm"
+              variant="ghost"
+              tone="danger"
+              @click="emit('delete-document', doc)"
+            >
+              删除文档
+            </AppButton>
           </div>
-          <div class="simple-item-meta">
-            <span>{{ formatSize(doc.fileSize) }}</span>
-            <span>{{ formatDate(doc.createdAt) }}</span>
-          </div>
-        </button>
+        </div>
       </div>
       <AppEmpty v-else description="该项目暂无文档" />
     </AppCard>
@@ -38,6 +48,7 @@
 import FileUpload from '../FileUpload.vue'
 import AppCard from '../ui/AppCard.vue'
 import AppEmpty from '../ui/AppEmpty.vue'
+import AppButton from '../ui/AppButton.vue'
 import { formatDate, formatSize } from '../../utils/formatters'
 import { notify } from '../../services/notify'
 
@@ -52,7 +63,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['upload-finished'])
+const emit = defineEmits(['upload-finished', 'delete-document'])
 
 const normalizeFileExt = (value) => String(value || '').trim().toLowerCase()
 
@@ -105,16 +116,13 @@ const openDocPreview = (doc) => {
 }
 
 .simple-item {
-  appearance: none;
   border: 1px solid #e8edf6;
   border-radius: 10px;
-  background: #fff;
-  cursor: pointer;
-  display: block;
-  text-align: left;
-  width: 100%;
-  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
   padding: 0.58rem 0.72rem;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
 }
 
 .simple-item:hover {
@@ -123,7 +131,19 @@ const openDocPreview = (doc) => {
   transform: translateY(-1px);
 }
 
-.simple-item:focus-visible {
+.simple-item-main {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 0;
+}
+
+.simple-item-main:focus-visible {
   outline: 2px solid rgba(79, 140, 255, 0.44);
   outline-offset: 2px;
 }
@@ -183,5 +203,10 @@ const openDocPreview = (doc) => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.simple-item-actions {
+  display: flex;
+  flex-shrink: 0;
 }
 </style>

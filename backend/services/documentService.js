@@ -126,6 +126,20 @@ const OFFICE_IMAGE_EXTENSIONS = new Set([
 ]);
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown']);
 const MARKDOWN_REMOTE_TIMEOUT_MS = 20 * 1000;
+const IMAGE_PROCESSING_MODE_RAW = 'raw';
+const IMAGE_PROCESSING_MODE_SMART = 'smart';
+const RASTER_IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.bmp',
+  '.tif',
+  '.tiff'
+]);
+const TIFF_EXTENSIONS = new Set(['.tif', '.tiff']);
+const UNSUPPORTED_OFFICE_VECTOR_EXTENSIONS = new Set(['.emf', '.wmf']);
 const IMAGE_MIME_TO_EXT = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
@@ -153,12 +167,160 @@ const IMAGE_EXT_TO_MIME = {
   '.wmf': 'image/x-wmf'
 };
 
+const normalizeImageProcessingMode = (
+  value,
+  fallback = config.processing.imageProcessingModeDefault || IMAGE_PROCESSING_MODE_RAW
+) => {
+  const fallbackMode = String(fallback || '').trim().toLowerCase() === IMAGE_PROCESSING_MODE_SMART
+    ? IMAGE_PROCESSING_MODE_SMART
+    : IMAGE_PROCESSING_MODE_RAW;
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === IMAGE_PROCESSING_MODE_SMART) return IMAGE_PROCESSING_MODE_SMART;
+  if (normalized === IMAGE_PROCESSING_MODE_RAW) return IMAGE_PROCESSING_MODE_RAW;
+  return fallbackMode;
+};
+
+const findAvailableFileName = async (outputDir, preferredName) => {
+  const ext = path.extname(preferredName);
+  const stem = path.basename(preferredName, ext) || 'image';
+  let index = 1;
+  let candidate = preferredName;
+
+  while (true) {
+    const candidatePath = path.join(outputDir, candidate);
+    try {
+      await fs.promises.access(candidatePath, fs.constants.F_OK);
+      index += 1;
+      candidate = `${stem}_${index}${ext}`;
+    } catch (error) {
+      return candidate;
+    }
+  }
+};
+
+const renderLoadedImageToPng = (loadedImage) => {
+  const width = toPositiveNumber(loadedImage?.width, 0);
+  const height = toPositiveNumber(loadedImage?.height, 0);
+  if (!width || !height) {
+    throw new Error('图片尺寸异常，无法转换为 PNG');
+  }
+
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(loadedImage, 0, 0, width, height);
+  return canvas.toBuffer('image/png');
+};
+
+async function normalizeUnsupportedImageFormats(images, outputDir, reportStageProgress) {
+  if (!Array.isArray(images) || images.length === 0) {
+    reportStageProgress(100, '图片格式检查完成');
+    return {
+      images: [],
+      summary: {
+        convertedCount: 0,
+        droppedCount: 0
+      }
+    };
+  }
+
+  let convertedCount = 0;
+  let droppedCount = 0;
+  const normalizedImages = [];
+
+  reportStageProgress(6, '正在检查图片格式...');
+  for (let index = 0; index < images.length; index++) {
+    const image = images[index];
+    const rawName = String(image?.name || '').trim();
+    const ext = path.extname(rawName).toLowerCase();
+    const inputPath = path.join(outputDir, rawName);
+
+    if (UNSUPPORTED_OFFICE_VECTOR_EXTENSIONS.has(ext)) {
+      try {
+        await fs.promises.rm(inputPath, { force: true });
+      } catch (cleanupError) {
+        // ignore cleanup error
+      }
+      droppedCount += 1;
+      const stage = Math.round(((index + 1) / images.length) * 100);
+      reportStageProgress(stage, `正在检查图片格式 (${index + 1}/${images.length})`);
+      continue;
+    }
+
+    if (!TIFF_EXTENSIONS.has(ext)) {
+      normalizedImages.push(image);
+      const stage = Math.round(((index + 1) / images.length) * 100);
+      reportStageProgress(stage, `正在检查图片格式 (${index + 1}/${images.length})`);
+      continue;
+    }
+
+    try {
+      const sourceBuffer = await fs.promises.readFile(inputPath);
+      const loadedImage = await loadImage(sourceBuffer);
+      const preferredName = `${path.basename(rawName, ext) || `image_${index + 1}`}.png`;
+      const nextName = await findAvailableFileName(outputDir, preferredName);
+      const nextPath = path.join(outputDir, nextName);
+      const pngBuffer = renderLoadedImageToPng(loadedImage);
+
+      await fs.promises.writeFile(nextPath, pngBuffer);
+      await fs.promises.rm(inputPath, { force: true });
+      const nextStats = await fs.promises.stat(nextPath).catch(() => null);
+
+      normalizedImages.push({
+        ...image,
+        name: nextName,
+        path: toPublicUploadPath(nextPath),
+        size: Number(nextStats?.size || pngBuffer.length || image?.size || 0),
+        width: toPositiveNumber(loadedImage?.width, Number(image?.width || 0)) || image?.width || null,
+        height: toPositiveNumber(loadedImage?.height, Number(image?.height || 0)) || image?.height || null
+      });
+      convertedCount += 1;
+    } catch (error) {
+      const details = String(error?.message || 'unknown');
+      console.warn(`TIFF 转换失败，已丢弃: ${rawName} (${details})`);
+      try {
+        await fs.promises.rm(inputPath, { force: true });
+      } catch (cleanupError) {
+        // ignore cleanup error
+      }
+      droppedCount += 1;
+    }
+
+    const stage = Math.round(((index + 1) / images.length) * 100);
+    reportStageProgress(stage, `正在检查图片格式 (${index + 1}/${images.length})`);
+  }
+
+  reportStageProgress(
+    100,
+    convertedCount > 0
+      ? `图片格式检查完成，已将 ${convertedCount} 张 TIFF 转为 PNG`
+      : '图片格式检查完成'
+  );
+
+  return {
+    images: normalizedImages.map((image, index) => ({
+      ...image,
+      id: index + 1
+    })),
+    summary: {
+      convertedCount,
+      droppedCount
+    }
+  };
+}
+
 // 提取文档中的图片
 exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
   const onProgress = options.onProgress;
   const dedupeEnabled = typeof options.enableDedupe === 'boolean'
     ? options.enableDedupe
     : config.processing.imageDedupeEnabled;
+  const imageProcessingMode = normalizeImageProcessingMode(
+    options.imageProcessingMode,
+    config.processing.imageProcessingModeDefault
+  );
+  const smartModeEnabled = imageProcessingMode === IMAGE_PROCESSING_MODE_SMART;
   const autoOcrEnabled = typeof options.enableOcr === 'boolean'
     ? options.enableOcr
     : config.processing.autoOcrEnabled;
@@ -212,6 +374,22 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       dedupedCount: 0
     };
 
+    let smartSummary = {
+      enabled: smartModeEnabled,
+      mode: imageProcessingMode,
+      originalCount: images.length,
+      keptCount: images.length,
+      filteredCount: 0,
+      filteredByReason: {},
+      keptByCategory: {},
+      filteredImages: []
+    };
+
+    let formatSummary = {
+      convertedCount: 0,
+      droppedCount: 0
+    };
+
     let namingSummary = {
       enabled: autoNamingEnabled,
       renamedCount: 0
@@ -236,13 +414,55 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
         zipPath: '',
         zipAbsolutePath: '',
         dedupe: dedupeSummary,
+        smart: smartSummary,
+        format: formatSummary,
         naming: namingSummary,
         ocr: ocrSummary
       };
     }
 
+    const formatReporter = createStageReporter(onProgress, 84, 2);
+    const normalizedResult = await normalizeUnsupportedImageFormats(images, outputDir, formatReporter);
+    images = normalizedResult.images;
+    formatSummary = normalizedResult.summary;
+
+    if (images.length === 0) {
+      reportProgress(onProgress, {
+        status: 'processing',
+        progress: 98,
+        message: '文档中未检测到可保留图片'
+      });
+      return {
+        images: [],
+        zipPath: '',
+        zipAbsolutePath: '',
+        dedupe: dedupeSummary,
+        smart: smartSummary,
+        format: formatSummary,
+        naming: namingSummary,
+        ocr: ocrSummary
+      };
+    }
+
+    if (smartModeEnabled) {
+      const smartReporter = createStageReporter(onProgress, 86, 4);
+      const smartResult = await applySmartImageProcessing(images, outputDir, smartReporter);
+      images = smartResult.images;
+      smartSummary = {
+        ...smartResult.summary,
+        enabled: true,
+        mode: IMAGE_PROCESSING_MODE_SMART
+      };
+    } else {
+      reportProgress(onProgress, {
+        status: 'processing',
+        progress: 90,
+        message: '已按原始模式保留全部图片'
+      });
+    }
+
     if (dedupeEnabled && images.length > 1) {
-      const dedupeReporter = createStageReporter(onProgress, 85, 5);
+      const dedupeReporter = createStageReporter(onProgress, 90, 4);
       const dedupeResult = await dedupeSimilarImages(images, outputDir, dedupeReporter, {
         hammingThreshold: config.processing.imageDedupeHammingThreshold,
         aspectTolerance: config.processing.imageDedupeAspectTolerance
@@ -256,13 +476,13 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
     } else {
       reportProgress(onProgress, {
         status: 'processing',
-        progress: 88,
+        progress: 94,
         message: dedupeEnabled ? '图片数量较少，已跳过去重' : '已跳过智能去重'
       });
     }
 
     if (autoNamingEnabled) {
-      const namingReporter = createStageReporter(onProgress, 90, 3);
+      const namingReporter = createStageReporter(onProgress, 94, 2);
       const namingResult = await applyAutoNaming(images, outputDir, sourceName, namingReporter);
       images = namingResult.images;
       namingSummary = {
@@ -272,25 +492,25 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
     } else {
       reportProgress(onProgress, {
         status: 'processing',
-        progress: 92,
+        progress: 96,
         message: '已跳过智能命名'
       });
     }
 
     if (autoOcrEnabled) {
-      const ocrReporter = createStageReporter(onProgress, 93, 3);
+      const ocrReporter = createStageReporter(onProgress, 96, 2);
       ocrSummary = await buildImageOcrIndex(images, outputDir, ocrReporter);
     } else {
       reportProgress(onProgress, {
         status: 'processing',
-        progress: 96,
+        progress: 98,
         message: '已跳过 OCR 建索引'
       });
     }
 
     reportProgress(onProgress, {
       status: 'processing',
-      progress: 96,
+      progress: 98,
       message: '正在打包图片...'
     });
 
@@ -309,6 +529,8 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       generatedAt: new Date().toISOString(),
       imageCount: images.length,
       dedupe: dedupeSummary,
+      smart: smartSummary,
+      format: formatSummary,
       naming: namingSummary,
       ocr: ocrSummary,
       images: images.map((image) => ({
@@ -317,6 +539,8 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
         width: image.width,
         height: image.height,
         size: image.size,
+        semanticCategory: image.semanticCategory || '',
+        semanticConfidence: Number(image.semanticConfidence || 0),
         ocrIndexed: Boolean(image.ocrIndexed),
         ocrText: image.ocrText || ''
       }))
@@ -336,6 +560,8 @@ exports.extractImages = async (inputFilePath, outputDir, options = {}) => {
       zipPath: toPublicUploadPath(zipOutputPath),
       zipAbsolutePath: zipOutputPath,
       dedupe: dedupeSummary,
+      smart: smartSummary,
+      format: formatSummary,
       naming: namingSummary,
       ocr: ocrSummary
     };
@@ -1166,6 +1392,466 @@ async function extractImagesFromPptx(pptxPath, outputDir, reportStageProgress) {
     buildContext: buildPptxExtractionContext,
     resolvePageNumber: resolvePptxImagePageNumber
   });
+}
+
+const clampUnit = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  if (num <= 0) return 0;
+  if (num >= 1) return 1;
+  return num;
+};
+
+const roundMetric = (value, digits = 4) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  const multiplier = 10 ** digits;
+  return Math.round(num * multiplier) / multiplier;
+};
+
+const toPositiveNumber = (value, fallback = 0) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return fallback;
+  return num;
+};
+
+const toImagePixelCount = (width, height) => {
+  const w = toPositiveNumber(width, 0);
+  const h = toPositiveNumber(height, 0);
+  if (!w || !h) return 0;
+  return Math.max(0, Math.floor(w) * Math.floor(h));
+};
+
+const collectImageVisualMetrics = (loadedImage) => {
+  const sourceWidth = toPositiveNumber(loadedImage?.width, 0);
+  const sourceHeight = toPositiveNumber(loadedImage?.height, 0);
+  if (!sourceWidth || !sourceHeight) {
+    return {
+      edgeDensity: 0,
+      luminanceStdDev: 0,
+      colorRichness: 0,
+      alphaRatio: 1
+    };
+  }
+
+  const maxSide = 128;
+  const scale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+  const sampleWidth = Math.max(1, Math.round(sourceWidth * scale));
+  const sampleHeight = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = createCanvas(sampleWidth, sampleHeight);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, sampleWidth, sampleHeight);
+  ctx.drawImage(loadedImage, 0, 0, sampleWidth, sampleHeight);
+
+  const { data } = ctx.getImageData(0, 0, sampleWidth, sampleHeight);
+  const luminance = new Float32Array(sampleWidth * sampleHeight);
+  const alphaMask = new Uint8Array(sampleWidth * sampleHeight);
+  const quantizedColorSet = new Set();
+
+  let alphaSum = 0;
+  let visibleCount = 0;
+  let luminanceSum = 0;
+  let luminanceSquareSum = 0;
+
+  for (let y = 0; y < sampleHeight; y++) {
+    for (let x = 0; x < sampleWidth; x++) {
+      const idx = (y * sampleWidth + x) * 4;
+      const pos = y * sampleWidth + x;
+      const alpha = data[idx + 3] / 255;
+      const lum = data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114;
+
+      alphaSum += alpha;
+      luminance[pos] = lum;
+
+      if (alpha >= 0.08) {
+        alphaMask[pos] = 1;
+        visibleCount += 1;
+        luminanceSum += lum;
+        luminanceSquareSum += lum * lum;
+        if (quantizedColorSet.size < 4096) {
+          const colorKey = `${data[idx] >> 4}_${data[idx + 1] >> 4}_${data[idx + 2] >> 4}`;
+          quantizedColorSet.add(colorKey);
+        }
+      }
+    }
+  }
+
+  let edgeHits = 0;
+  let edgeComparisons = 0;
+  const edgeThreshold = 22;
+  for (let y = 0; y < sampleHeight; y++) {
+    for (let x = 0; x < sampleWidth; x++) {
+      const pos = y * sampleWidth + x;
+      if (!alphaMask[pos]) continue;
+
+      if (x + 1 < sampleWidth) {
+        const rightPos = y * sampleWidth + x + 1;
+        if (alphaMask[rightPos]) {
+          edgeComparisons += 1;
+          if (Math.abs(luminance[pos] - luminance[rightPos]) >= edgeThreshold) {
+            edgeHits += 1;
+          }
+        }
+      }
+
+      if (y + 1 < sampleHeight) {
+        const bottomPos = (y + 1) * sampleWidth + x;
+        if (alphaMask[bottomPos]) {
+          edgeComparisons += 1;
+          if (Math.abs(luminance[pos] - luminance[bottomPos]) >= edgeThreshold) {
+            edgeHits += 1;
+          }
+        }
+      }
+    }
+  }
+
+  const samplePixelCount = sampleWidth * sampleHeight;
+  const normalizedVisibleCount = Math.max(visibleCount, 1);
+  const luminanceMean = luminanceSum / normalizedVisibleCount;
+  const luminanceVariance = Math.max(0, (luminanceSquareSum / normalizedVisibleCount) - (luminanceMean ** 2));
+
+  return {
+    edgeDensity: edgeComparisons > 0 ? roundMetric(edgeHits / edgeComparisons) : 0,
+    luminanceStdDev: roundMetric(Math.sqrt(luminanceVariance)),
+    colorRichness: roundMetric(quantizedColorSet.size / normalizedVisibleCount),
+    alphaRatio: samplePixelCount > 0 ? roundMetric(alphaSum / samplePixelCount) : 1
+  };
+};
+
+const classifyImageSemanticCategory = (record, duplicateCount) => {
+  const pixelCount = toImagePixelCount(record.width, record.height);
+  const areaRatio = clampUnit(record.areaRatio);
+  const aspectRatio = Number(record.aspectRatio || 0);
+  const edgeDensity = clampUnit(record.edgeDensity);
+  const luminanceStdDev = Number(record.luminanceStdDev || 0);
+  const colorRichness = clampUnit(record.colorRichness);
+  const alphaRatio = clampUnit(record.alphaRatio);
+  const hasDimensions = toPositiveNumber(record.width, 0) > 0 && toPositiveNumber(record.height, 0) > 0;
+  const hasVisualMetrics = Boolean(record.hasVisualMetrics);
+  const byteSize = Number(record.byteSize || 0);
+
+  const smallByPixels = pixelCount > 0 && pixelCount <= 140_000;
+  const smallByArea = areaRatio > 0 && areaRatio <= 0.018;
+  const compactDimensions = hasDimensions
+    && toPositiveNumber(record.width, 0) <= 340
+    && toPositiveNumber(record.height, 0) <= 340;
+  const nearSquare = hasDimensions && aspectRatio >= 0.6 && aspectRatio <= 1.7;
+  const lowDetail = hasVisualMetrics && edgeDensity <= 0.1 && luminanceStdDev <= 34 && colorRichness <= 0.28;
+  const transparentDecorative = hasVisualMetrics && alphaRatio <= 0.75 && lowDetail;
+  const lightweight = byteSize > 0 && byteSize <= 24 * 1024;
+  const repeated = duplicateCount > 1;
+
+  if ((smallByPixels || smallByArea || compactDimensions || lightweight) && (nearSquare || lowDetail || transparentDecorative)) {
+    let confidence = 0.56;
+    if (smallByPixels) confidence += 0.12;
+    if (smallByArea) confidence += 0.08;
+    if (compactDimensions) confidence += 0.08;
+    if (nearSquare) confidence += 0.06;
+    if (lowDetail) confidence += 0.12;
+    if (repeated) confidence += 0.1;
+    if (transparentDecorative) confidence += 0.08;
+    if (lightweight) confidence += 0.08;
+    return {
+      category: 'icon_logo',
+      confidence: roundMetric(Math.min(0.99, confidence), 3),
+      lowDetail,
+      repeated,
+      smallByPixels,
+      smallByArea,
+      compactDimensions,
+      transparentDecorative,
+      lightweight
+    };
+  }
+
+  if (edgeDensity >= 0.11 && colorRichness <= 0.2) {
+    return {
+      category: 'diagram_chart',
+      confidence: roundMetric(Math.min(0.96, 0.6 + edgeDensity * 1.1), 3),
+      lowDetail,
+      repeated,
+      smallByPixels,
+      smallByArea,
+      compactDimensions,
+      transparentDecorative,
+      lightweight
+    };
+  }
+
+  if (colorRichness >= 0.2 && luminanceStdDev >= 32) {
+    return {
+      category: 'screenshot_photo',
+      confidence: roundMetric(Math.min(0.94, 0.58 + colorRichness), 3),
+      lowDetail,
+      repeated,
+      smallByPixels,
+      smallByArea,
+      compactDimensions,
+      transparentDecorative,
+      lightweight
+    };
+  }
+
+  return {
+    category: 'unknown',
+    confidence: 0.5,
+    lowDetail,
+    repeated,
+    smallByPixels,
+    smallByArea,
+    compactDimensions,
+    transparentDecorative,
+    lightweight
+  };
+};
+
+const toSummaryObject = (counterMap) => {
+  const entries = Array.from(counterMap.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  const result = {};
+  entries.forEach(([key, value]) => {
+    result[key] = value;
+  });
+  return result;
+};
+
+const pickFallbackRecord = (records = []) => {
+  if (!Array.isArray(records) || records.length === 0) return null;
+  return [...records].sort((left, right) => {
+    const leftPixels = toImagePixelCount(left.width, left.height);
+    const rightPixels = toImagePixelCount(right.width, right.height);
+    if (rightPixels !== leftPixels) return rightPixels - leftPixels;
+    return Number(right.byteSize || 0) - Number(left.byteSize || 0);
+  })[0] || null;
+};
+
+async function applySmartImageProcessing(images, outputDir, reportStageProgress) {
+  if (!Array.isArray(images) || images.length === 0) {
+    reportStageProgress(100, '智能过滤已完成，当前无需处理');
+    return {
+      images: [],
+      summary: {
+        enabled: true,
+        mode: IMAGE_PROCESSING_MODE_SMART,
+        originalCount: 0,
+        keptCount: 0,
+        filteredCount: 0,
+        filteredByReason: {},
+        keptByCategory: {},
+        filteredImages: []
+      }
+    };
+  }
+
+  let maxPixelCount = 0;
+  const hashCounter = new Map();
+  const records = [];
+
+  reportStageProgress(5, '正在分析图片信息密度...');
+  for (let index = 0; index < images.length; index++) {
+    const image = images[index];
+    const filePath = path.join(outputDir, image.name);
+    const record = {
+      image,
+      filePath,
+      width: toPositiveNumber(image?.width, 0),
+      height: toPositiveNumber(image?.height, 0),
+      byteSize: Number(image?.size || 0),
+      exactHash: '',
+      edgeDensity: 0,
+      luminanceStdDev: 0,
+      colorRichness: 0,
+      alphaRatio: 1,
+      aspectRatio: 0,
+      areaRatio: 0,
+      pixelCount: 0,
+      hasVisualMetrics: false
+    };
+
+    try {
+      const buffer = await fs.promises.readFile(filePath);
+      record.exactHash = crypto.createHash('sha1').update(buffer).digest('hex');
+      const ext = path.extname(image.name || '').toLowerCase();
+      if (RASTER_IMAGE_EXTENSIONS.has(ext)) {
+        try {
+          const loaded = await loadImage(buffer);
+          record.width = toPositiveNumber(loaded?.width, record.width);
+          record.height = toPositiveNumber(loaded?.height, record.height);
+          const visual = collectImageVisualMetrics(loaded);
+          record.edgeDensity = visual.edgeDensity;
+          record.luminanceStdDev = visual.luminanceStdDev;
+          record.colorRichness = visual.colorRichness;
+          record.alphaRatio = visual.alphaRatio;
+          record.hasVisualMetrics = true;
+        } catch (decodeError) {
+          // raster decode 失败时仍保留原图并继续流程
+        }
+      }
+
+      try {
+        const stats = await fs.promises.stat(filePath);
+        record.byteSize = Number(stats.size || record.byteSize || 0);
+      } catch (statError) {
+        // ignore stat failures
+      }
+    } catch (error) {
+      console.error(`智能过滤分析失败，已保留原图: ${image?.name}`, error);
+    }
+
+    const pixelCount = toImagePixelCount(record.width, record.height);
+    record.pixelCount = pixelCount;
+    if (pixelCount > maxPixelCount) {
+      maxPixelCount = pixelCount;
+    }
+    record.aspectRatio = record.height > 0 ? roundMetric(record.width / record.height) : 0;
+    if (record.exactHash) {
+      hashCounter.set(record.exactHash, (hashCounter.get(record.exactHash) || 0) + 1);
+    }
+    records.push(record);
+
+    const stage = 5 + Math.round(((index + 1) / images.length) * 55);
+    reportStageProgress(stage, `正在分析图片 (${index + 1}/${images.length})`);
+  }
+
+  records.forEach((record) => {
+    record.areaRatio = maxPixelCount > 0 ? roundMetric(record.pixelCount / maxPixelCount) : 0;
+  });
+
+  const keptRecords = [];
+  const filteredRecords = [];
+  records.forEach((record) => {
+    const duplicateCount = record.exactHash ? (hashCounter.get(record.exactHash) || 1) : 1;
+    const semantic = classifyImageSemanticCategory(record, duplicateCount);
+    const aspectRatio = Number(record.aspectRatio || 0);
+    const thinDecoration = aspectRatio >= 7 || (aspectRatio > 0 && aspectRatio <= 0.14);
+    const tinyBySize = Number(record.byteSize || 0) > 0 && Number(record.byteSize || 0) <= 30 * 1024;
+    const shouldFilterByIcon = semantic.category === 'icon_logo'
+      && (
+        semantic.repeated
+        || semantic.smallByPixels
+        || semantic.smallByArea
+        || (semantic.compactDimensions && semantic.lowDetail)
+        || semantic.transparentDecorative
+        || semantic.lightweight
+      );
+    const shouldFilterByDecorativeStrip = thinDecoration
+      && record.areaRatio <= 0.1
+      && (semantic.lowDetail || semantic.transparentDecorative || tinyBySize);
+    const shouldFilterByDuplicateDecorative = semantic.category === 'unknown'
+      && semantic.repeated
+      && semantic.lowDetail
+      && (semantic.smallByArea || semantic.smallByPixels);
+    const shouldFilterByLowInfoUnknown = semantic.category === 'unknown'
+      && (semantic.lowDetail || tinyBySize)
+      && (semantic.smallByArea || semantic.smallByPixels || semantic.compactDimensions);
+
+    let keep = true;
+    let reason = '';
+    if (shouldFilterByIcon) {
+      keep = false;
+      if (semantic.repeated) reason = 'duplicate_icon';
+      else if (semantic.transparentDecorative) reason = 'decorative_transparent';
+      else if (semantic.lightweight) reason = 'lightweight_icon';
+      else reason = 'small_icon';
+    } else if (shouldFilterByDecorativeStrip) {
+      keep = false;
+      reason = 'decorative_strip';
+    } else if (shouldFilterByDuplicateDecorative) {
+      keep = false;
+      reason = 'duplicate_decorative';
+    } else if (shouldFilterByLowInfoUnknown) {
+      keep = false;
+      reason = 'low_info_decorative';
+    }
+
+    record.semanticCategory = semantic.category;
+    record.semanticConfidence = semantic.confidence;
+    record.filterReason = reason;
+    record.keep = keep;
+
+    if (keep) {
+      keptRecords.push(record);
+    } else {
+      filteredRecords.push(record);
+    }
+  });
+
+  if (keptRecords.length === 0 && filteredRecords.length > 0) {
+    const fallback = pickFallbackRecord(filteredRecords);
+    if (fallback) {
+      fallback.keep = true;
+      fallback.filterReason = '';
+      fallback.semanticCategory = fallback.semanticCategory || 'unknown';
+      fallback.semanticConfidence = Math.max(0.5, Number(fallback.semanticConfidence || 0));
+      keptRecords.push(fallback);
+      const fallbackIndex = filteredRecords.findIndex((record) => record.filePath === fallback.filePath);
+      if (fallbackIndex >= 0) filteredRecords.splice(fallbackIndex, 1);
+    }
+  }
+
+  const keptByCategory = new Map();
+  const filteredByReason = new Map();
+  keptRecords.forEach((record) => {
+    const category = String(record.semanticCategory || 'unknown');
+    keptByCategory.set(category, (keptByCategory.get(category) || 0) + 1);
+  });
+  filteredRecords.forEach((record) => {
+    const reason = String(record.filterReason || 'filtered');
+    filteredByReason.set(reason, (filteredByReason.get(reason) || 0) + 1);
+  });
+
+  reportStageProgress(72, '正在清理低价值图片...');
+  let deletedCount = 0;
+  for (let index = 0; index < filteredRecords.length; index++) {
+    const record = filteredRecords[index];
+    try {
+      await fs.promises.rm(record.filePath, { force: true });
+      deletedCount += 1;
+    } catch (error) {
+      console.error(`删除低价值图片失败: ${record.filePath}`, error);
+    }
+  }
+
+  const filteredImages = filteredRecords.map((record) => ({
+    name: record.image?.name || '',
+    page: Number(record.image?.page || 0) || null,
+    reason: String(record.filterReason || 'filtered'),
+    category: String(record.semanticCategory || 'unknown'),
+    confidence: Number(record.semanticConfidence || 0)
+  }));
+
+  const keptImages = keptRecords.map((record, index) => ({
+    ...record.image,
+    id: index + 1,
+    width: record.width || record.image?.width || null,
+    height: record.height || record.image?.height || null,
+    size: Number(record.byteSize || record.image?.size || 0),
+    semanticCategory: String(record.semanticCategory || 'unknown'),
+    semanticConfidence: Number(record.semanticConfidence || 0)
+  }));
+
+  reportStageProgress(
+    100,
+    deletedCount > 0
+      ? `智能过滤完成，保留 ${keptImages.length} 张重点图片（过滤 ${deletedCount} 张）`
+      : `智能过滤完成，保留 ${keptImages.length} 张重点图片`
+  );
+
+  return {
+    images: keptImages,
+    summary: {
+      enabled: true,
+      mode: IMAGE_PROCESSING_MODE_SMART,
+      originalCount: images.length,
+      keptCount: keptImages.length,
+      filteredCount: filteredImages.length,
+      filteredByReason: toSummaryObject(filteredByReason),
+      keptByCategory: toSummaryObject(keptByCategory),
+      filteredImages
+    }
+  };
 }
 
 const toSafeNumber = (value) => {

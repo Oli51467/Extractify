@@ -135,6 +135,14 @@ export const fetchProjectDocuments = async (projectId, limit = 200) => {
   return data.documents || []
 }
 
+export const removeProjectDocument = async (projectId, documentId) => {
+  const data = await apiFetch(
+    `/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(documentId)}`,
+    { method: 'DELETE' }
+  )
+  return data.cleanup || null
+}
+
 export const fetchProjectAssets = async (projectId, limit = 500) => {
   const data = await apiFetch(`/api/projects/${encodeURIComponent(projectId)}/assets?limit=${limit}`)
   return data.assets || []
@@ -152,6 +160,23 @@ export const updateProjectAssetOcr = async (projectId, assetId, payload = {}) =>
     }
   )
   return data.asset || null
+}
+
+export const uploadMergedImageToAssetLibrary = async (projectId, fileBlob, fileName = 'merged.png') => {
+  const formData = new FormData()
+  formData.append('file', fileBlob, fileName)
+  const data = await apiFetch(
+    `/api/projects/${encodeURIComponent(projectId)}/assets/merged-image`,
+    {
+      method: 'POST',
+      body: formData
+    }
+  )
+  return {
+    asset: data.asset || null,
+    runId: data.runId || '',
+    message: data.message || ''
+  }
 }
 
 export const fetchProjectRuns = async (projectId, limit = 200) => {

@@ -111,7 +111,10 @@ const config = {
     imageDedupeHammingThreshold: toNumber(process.env.IMAGE_DEDUPE_HAMMING_THRESHOLD, 6, 0),
     imageDedupeAspectTolerance: toNumber(process.env.IMAGE_DEDUPE_ASPECT_TOLERANCE, 0.03, 0),
     autoOcrEnabled: process.env.AUTO_OCR_ENABLED !== 'false',
-    autoNamingEnabled: process.env.AUTO_NAMING_ENABLED !== 'false'
+    autoNamingEnabled: process.env.AUTO_NAMING_ENABLED !== 'false',
+    imageProcessingModeDefault: String(process.env.IMAGE_PROCESSING_MODE_DEFAULT || 'raw').trim().toLowerCase() === 'smart'
+      ? 'smart'
+      : 'raw'
   },
   share: {
     enabled: process.env.SHARE_LINK_ENABLED !== 'false',

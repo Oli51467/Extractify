@@ -71,11 +71,17 @@ app.use('/api', apiRoutes);
 
 // 错误处理中间件
 app.use((err, req, res, next) => {
-  console.error('全局错误:', err);
-  res.status(500).json({
+  const statusCode = Number(err?.statusCode || err?.status || (err?.code === 'ENOENT' ? 404 : 500));
+  if (statusCode >= 500) {
+    console.error('全局错误:', err);
+  } else {
+    console.warn(`请求失败(${statusCode}):`, err?.message || err);
+  }
+
+  res.status(statusCode).json({
     success: false,
-    message: '服务器错误',
-    error: err.message
+    message: statusCode === 404 ? '资源不存在' : (err?.message || '服务器错误'),
+    error: err?.message || 'unknown_error'
   });
 });
 

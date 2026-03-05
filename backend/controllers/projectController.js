@@ -1,6 +1,14 @@
 const fs = require('fs');
+const path = require('path');
 const projectService = require('../services/projectService');
 const documentPreviewService = require('../services/documentPreviewService');
+const config = require('../config');
+
+const toPublicUploadPath = (absolutePath) => {
+  const relativePath = path.relative(config.paths.uploadRoot, absolutePath);
+  const normalized = relativePath.split(path.sep).join('/');
+  return `/uploads/${normalized}`;
+};
 
 const listProjects = (req, res) => {
   try {
@@ -102,6 +110,26 @@ const listProjectDocuments = (req, res) => {
     return res.status(statusCode).json({
       success: false,
       message: error.message || '获取项目文档失败'
+    });
+  }
+};
+
+const deleteProjectDocument = async (req, res) => {
+  try {
+    const cleanup = await projectService.deleteDocument(
+      req.sessionId,
+      req.params.projectId,
+      req.params.documentId
+    );
+    return res.json({
+      success: true,
+      cleanup
+    });
+  } catch (error) {
+    const statusCode = ['PROJECT_NOT_FOUND', 'DOCUMENT_NOT_FOUND'].includes(error.code) ? 404 : 400;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || '删除文档失败'
     });
   }
 };
@@ -267,6 +295,91 @@ const listProjectAudit = (req, res) => {
   }
 };
 
+const uploadMergedAsset = async (req, res) => {
+  try {
+    const projectId = String(req.params.projectId || '').trim();
+    const sessionId = String(req.sessionId || '').trim();
+    const uploadedFile = req.file;
+    if (!uploadedFile?.path) {
+      return res.status(400).json({
+        success: false,
+        message: '请先上传长图文件'
+      });
+    }
+
+    projectService.assertProjectOwnedBySession(sessionId, projectId);
+
+    const absolutePath = path.resolve(String(uploadedFile.path || '').trim());
+    const fileStats = await fs.promises.stat(absolutePath).catch(() => null);
+    if (!fileStats || !fileStats.isFile()) {
+      return res.status(404).json({
+        success: false,
+        message: '长图文件不存在'
+      });
+    }
+
+    const now = new Date().toISOString();
+    const sourceName = 'Merge 长图';
+    const run = projectService.createRun(sessionId, projectId, {
+      sourceName,
+      status: 'completed',
+      progress: 100,
+      message: '长图已加入素材库',
+      startedAt: now,
+      finishedAt: now,
+      params: {
+        source: 'merge_image_uploader'
+      }
+    });
+
+    const fileName = path.basename(absolutePath);
+    const publicPath = toPublicUploadPath(absolutePath);
+    projectService.updateRun(sessionId, projectId, run.id, {
+      status: 'completed',
+      progress: 100,
+      message: '长图已加入素材库',
+      result: {
+        imageCount: 1,
+        zipUrl: '',
+        source: 'merge_image_uploader'
+      },
+      finishedAt: now
+    });
+
+    const assets = projectService.replaceRunAssets(sessionId, projectId, run.id, {
+      images: [
+        {
+          name: fileName,
+          path: publicPath,
+          size: Number(fileStats.size || 0),
+          width: null,
+          height: null,
+          page: 1,
+          deduped: false,
+          isPrimary: true,
+          ocrText: '',
+          ocrIndexed: false
+        }
+      ],
+      sourceName,
+      fileType: path.extname(fileName).toLowerCase()
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: '长图已添加到素材库',
+      runId: run.id,
+      asset: assets[0] || null
+    });
+  } catch (error) {
+    const statusCode = error.code === 'PROJECT_NOT_FOUND' ? 404 : 400;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || '添加素材失败'
+    });
+  }
+};
+
 module.exports = {
   listProjects,
   createProject,
@@ -274,11 +387,13 @@ module.exports = {
   updateProject,
   deleteProject,
   listProjectDocuments,
+  deleteProjectDocument,
   previewProjectDocument,
   listProjectRuns,
   listProjectAssets,
   updateProjectAssetOcr,
   listProjectBatches,
   listBatchItems,
-  listProjectAudit
+  listProjectAudit,
+  uploadMergedAsset
 };

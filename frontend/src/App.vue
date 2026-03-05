@@ -3,8 +3,25 @@
         <header class="app-header">
             <div class="container app-brand-row">
                 <h1 class="app-brand">
-                    <AppBrandLogo />
+                    <router-link to="/" class="app-brand-link">
+                        <AppBrandLogo />
+                    </router-link>
                 </h1>
+                <nav
+                    v-if="showWorkbenchNav"
+                    class="app-top-nav"
+                    aria-label="工作台导航"
+                >
+                    <router-link
+                        v-for="item in topBannerNavItems"
+                        :key="item.key"
+                        :to="item.to"
+                        class="top-nav-link"
+                        :class="{ 'is-active': isNavActive(item) }"
+                    >
+                        {{ item.label }}
+                    </router-link>
+                </nav>
                 <div
                     v-if="authEnabled"
                     ref="authMenuRef"
@@ -79,6 +96,10 @@ import AppDialogHost from './components/ui/AppDialogHost.vue'
 import AppBrandLogo from './components/ui/AppBrandLogo.vue'
 import AppButton from './components/ui/AppButton.vue'
 import AppIcon from './components/ui/AppIcon.vue'
+import {
+    TOP_BANNER_NAV_HIDDEN_ROUTES,
+    TOP_BANNER_NAV_ITEMS
+} from './config/topBannerNav'
 import { notify } from './services/notify'
 import { useAuthSession } from './composables/useAuthSession'
 
@@ -93,9 +114,19 @@ const {
 } = useAuthSession()
 
 const isLoginPage = computed(() => route.name === 'DocPixLogin')
+const topBannerNavItems = TOP_BANNER_NAV_ITEMS
+const showWorkbenchNav = computed(() => {
+    const routeName = String(route.name || '')
+    return !TOP_BANNER_NAV_HIDDEN_ROUTES.includes(routeName)
+})
 const userDisplayName = computed(() => user.value?.name || user.value?.email || '已登录用户')
 const authMenuOpen = ref(false)
 const authMenuRef = ref(null)
+
+const isNavActive = (item) => {
+    const routeName = String(route.name || '')
+    return item.activeRouteNames.includes(routeName)
+}
 
 const closeAuthMenu = () => {
     authMenuOpen.value = false
@@ -199,18 +230,16 @@ body {
 
     .container {
         display: flex;
-        justify-content: center;
-        max-width: 100%;
-        position: relative;
+        max-width: min(1680px, calc(100vw - 24px));
         width: 100%;
-        padding: 0;
     }
 }
 
 .app-brand-row {
     align-items: center;
     display: flex;
-    justify-content: center;
+    gap: 0.9rem;
+    justify-content: space-between;
     min-height: 38px;
 }
 
@@ -219,6 +248,45 @@ body {
     display: inline-flex;
     line-height: 1;
     margin: 0;
+    flex-shrink: 0;
+}
+
+.app-brand-link {
+    align-items: center;
+    display: inline-flex;
+    text-decoration: none;
+}
+
+.app-top-nav {
+    align-items: center;
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.top-nav-link {
+    align-items: center;
+    border-bottom: 2px solid transparent;
+    color: #72819b;
+    display: inline-flex;
+    font-size: 0.84rem;
+    font-weight: 600;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0.12rem 0.18rem;
+    text-decoration: none;
+    transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.top-nav-link:hover {
+    color: #3f79f3;
+}
+
+.top-nav-link.is-active {
+    border-bottom-color: #3f79f3;
+    color: #2f66d2;
 }
 
 .app-main {
@@ -229,10 +297,8 @@ body {
 .app-auth-actions {
     align-items: center;
     display: flex;
-    position: absolute;
-    right: 1rem;
-    top: 50%;
-    transform: translateY(-50%);
+    flex-shrink: 0;
+    position: relative;
 }
 
 .auth-menu-trigger {
@@ -330,6 +396,20 @@ body {
 }
 
 @media (max-width: 768px) {
+    .app-brand-row {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .app-top-nav {
+        order: 3;
+        width: 100%;
+    }
+
+    .app-auth-actions {
+        order: 2;
+    }
+
     .auth-user-name {
         display: none;
     }

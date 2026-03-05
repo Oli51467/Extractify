@@ -3,7 +3,11 @@ const fs = require('fs');
 const crypto = require('crypto');
 const projectService = require('./projectService');
 const jobService = require('./jobService');
-const { processExtractionTask, parseBooleanFlag } = require('../controllers/documentController');
+const {
+  processExtractionTask,
+  parseBooleanFlag,
+  parseImageProcessingMode
+} = require('../controllers/documentController');
 const config = require('../config');
 const { normalizeUploadedFilename } = require('../utils/filename');
 
@@ -43,6 +47,10 @@ const updateBatchItemFromProgress = (sessionId, projectId, item, patch) => {
 const processBatchItem = async (sessionId, projectId, batchId, item, defaults = {}) => {
   const itemParams = item.params || {};
   const dedupeEnabled = parseBooleanFlag(itemParams.dedupeEnabled, defaults.dedupeEnabled);
+  const imageProcessingMode = parseImageProcessingMode(
+    itemParams.imageProcessingMode,
+    defaults.imageProcessingMode
+  );
   const filePath = String(itemParams.filePath || '').trim();
   const originalFilename = normalizeUploadedFilename(
     item.originalFilename || itemParams.originalFilename || item.sourceName || '',
@@ -62,7 +70,8 @@ const processBatchItem = async (sessionId, projectId, batchId, item, defaults = 
     jobId: workingJobId,
     params: {
       ...itemParams,
-      dedupeEnabled
+      dedupeEnabled,
+      imageProcessingMode
     }
   });
   projectService.recomputeBatchJobCounters(sessionId, projectId, batchId);
@@ -76,6 +85,7 @@ const processBatchItem = async (sessionId, projectId, batchId, item, defaults = 
       size: Number(itemParams.fileSize || 0)
     },
     dedupeEnabled,
+    imageProcessingMode,
     projectId,
     batchId,
     documentId: item.documentId || '',
@@ -92,6 +102,7 @@ const processBatchItem = async (sessionId, projectId, batchId, item, defaults = 
     dedupe: task.result?.dedupe || null,
     naming: task.result?.naming || null,
     ocr: task.result?.ocr || null,
+    smart: task.result?.smart || null,
     share: task.share || null,
     runId: task.runId || '',
     documentId: task.documentId || ''
@@ -164,13 +175,18 @@ const createBatchFromUploadedFiles = (sessionId, projectId, files = [], options 
 
   projectService.assertProjectOwnedBySession(sessionId, projectId);
   const dedupeEnabled = parseBooleanFlag(options.dedupeEnabled, config.processing.imageDedupeEnabled);
+  const imageProcessingMode = parseImageProcessingMode(
+    options.imageProcessingMode,
+    config.processing.imageProcessingModeDefault
+  );
 
   const batch = projectService.createBatchJob(sessionId, projectId, {
     name: options.name || `批处理 ${new Date().toLocaleString()}`,
     status: 'queued',
     totalItems: files.length,
     params: {
-      dedupeEnabled
+      dedupeEnabled,
+      imageProcessingMode
     }
   });
 
@@ -196,7 +212,8 @@ const createBatchFromUploadedFiles = (sessionId, projectId, files = [], options 
         filePath: file.path,
         fileSize: Number(file.size || 0),
         originalFilename,
-        dedupeEnabled
+        dedupeEnabled,
+        imageProcessingMode
       }
     };
   });
@@ -205,7 +222,8 @@ const createBatchFromUploadedFiles = (sessionId, projectId, files = [], options 
 
   setImmediate(() => {
     processBatchInternal(sessionId, projectId, batch.id, {
-      dedupeEnabled
+      dedupeEnabled,
+      imageProcessingMode
     });
   });
 
@@ -245,7 +263,11 @@ const retryFailedItems = (sessionId, projectId, batchId) => {
 
   setImmediate(() => {
     processBatchInternal(sessionId, projectId, batchId, {
-      dedupeEnabled: parseBooleanFlag(batch?.params?.dedupeEnabled, config.processing.imageDedupeEnabled)
+      dedupeEnabled: parseBooleanFlag(batch?.params?.dedupeEnabled, config.processing.imageDedupeEnabled),
+      imageProcessingMode: parseImageProcessingMode(
+        batch?.params?.imageProcessingMode,
+        config.processing.imageProcessingModeDefault
+      )
     });
   });
 

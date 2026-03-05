@@ -1,22 +1,5 @@
 <template>
   <aside class="project-sidebar">
-    <div class="project-workbench-switcher" aria-label="工作台切换">
-      <router-link
-        to="/"
-        class="switch-link"
-        :class="{ 'is-active': workspaceType !== 'merge' }"
-      >
-        Extract
-      </router-link>
-      <router-link
-        to="/mergify"
-        class="switch-link"
-        :class="{ 'is-active': workspaceType === 'merge' }"
-      >
-        Merge
-      </router-link>
-    </div>
-
     <div class="project-sidebar-header">
       <span class="project-count">{{ projects.length }} 个项目</span>
       <AppButton size="sm" variant="outline" @click="emit('create-project')">
@@ -155,41 +138,6 @@ const emit = defineEmits([
     font-weight: 600;
     color: #8b96ab;
   }
-}
-
-.project-workbench-switcher {
-  background: #f6f9ff;
-  border: 1px solid #dfe8f9;
-  border-radius: 10px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.3rem;
-  padding: 0.34rem;
-  width: 100%;
-}
-
-.switch-link {
-  align-items: center;
-  border-radius: 8px;
-  color: #72819b;
-  display: flex;
-  font-size: 0.84rem;
-  font-weight: 600;
-  justify-content: center;
-  min-height: 32px;
-  padding: 0.3rem 0.6rem;
-  text-decoration: none;
-  transition: all 0.18s ease;
-}
-
-.switch-link:hover {
-  color: #3f79f3;
-}
-
-.switch-link.is-active {
-  background: #ffffff;
-  box-shadow: 0 7px 16px -14px rgba(63, 121, 243, 0.75);
-  color: #3f79f3;
 }
 
 .project-list {

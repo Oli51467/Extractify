@@ -21,6 +21,16 @@ const router = createRouter({
       component: Home
     },
     {
+      path: '/assets',
+      name: 'DocPixAssets',
+      component: Home
+    },
+    {
+      path: '/history',
+      name: 'DocPixHistory',
+      component: Home
+    },
+    {
       path: '/share/:token',
       name: 'DocPixShare',
       component: Share
